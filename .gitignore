@@ -1,3 +1,7 @@
+# Build output
+build/
+sdkconfig.old
+
 # Prerequisites
 *.d
 
@@ -35,21 +39,26 @@
 *.i*86
 *.x86_64
 *.hex
+*.bin
 
 # Debug files
 *.dSYM/
 *.su
 *.idb
 *.pdb
-
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
-
-# debug information files
 *.dwo
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Managed components (fetched by IDF component manager)
+managed_components/
+dependencies.lock
