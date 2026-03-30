@@ -1,0 +1,7 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+BreakBeforeBraces: Attach
+ColumnLimit: 100
+SortIncludes: true
+AlignConsecutiveMacros: true
