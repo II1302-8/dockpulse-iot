@@ -1,5 +1,6 @@
 name: Task
 description: A general task or chore
+type: Task
 labels: ["chore"]
 body:
   - type: textarea

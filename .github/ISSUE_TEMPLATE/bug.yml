@@ -1,5 +1,6 @@
 name: Bug Report
 description: Report something that isn't working
+type: Bug
 labels: ["bug"]
 body:
   - type: textarea
