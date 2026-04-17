@@ -1,0 +1,30 @@
+# CODEOWNERS for II1302-8/dockpulse-iot
+# ESP-IDF firmware for sensor/mesh nodes.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+# Last matching pattern wins. Patterns are relative to repo root.
+
+# Fallback — maintainer / system architect
+*                           @XiShell
+
+# Firmware entry point & app config
+/main/**                    @Doodlejnoodle @XiShell
+
+# ESP-IDF components
+/components/mesh/**         @Doodlejnoodle @XiShell
+/components/sensor/**       @Doodlejnoodle @XiShell
+
+# Build system
+/CMakeLists.txt             @Doodlejnoodle @XiShell
+/Makefile                   @Doodlejnoodle @XiShell
+/sdkconfig.defaults         @Doodlejnoodle @XiShell
+
+# Tooling / formatting
+/.clang-format              @XiShell
+/.editorconfig              @XiShell
+
+# CI, issue templates, dev scripts
+/.github/**                 @XiShell
+/scripts/**                 @XiShell
+
+# Repo docs
+/README.md                  @XiShell @Doodlejnoodle
