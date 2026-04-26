@@ -1,7 +1,7 @@
 BasedOnStyle: LLVM
 IndentWidth: 4
 UseTab: Never
-BreakBeforeBraces: Attach
+BreakBeforeBraces: Linux
 ColumnLimit: 100
 SortIncludes: true
 AlignConsecutiveMacros: true

@@ -23,50 +23,46 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#define RADAR_PORT  CONFIG_DOCKPULSE_RADAR_UART_PORT
-#define RADAR_TX    CONFIG_DOCKPULSE_RADAR_UART_TX
-#define RADAR_RX    CONFIG_DOCKPULSE_RADAR_UART_RX
-#define RADAR_BAUD  CONFIG_DOCKPULSE_RADAR_UART_BAUD
+#define RADAR_PORT CONFIG_DOCKPULSE_RADAR_UART_PORT
+#define RADAR_TX   CONFIG_DOCKPULSE_RADAR_UART_TX
+#define RADAR_RX   CONFIG_DOCKPULSE_RADAR_UART_RX
+#define RADAR_BAUD CONFIG_DOCKPULSE_RADAR_UART_BAUD
 
-#define RX_BUF_SZ   1024
-#define MAX_FRAME   64   // report frame is ~43 bytes
+#define RX_BUF_SZ 1024
+#define MAX_FRAME 64 // report frame is ~43 bytes
 
 static const char *TAG = "dp_radar";
 
-static const uint8_t REPORT_HDR[4]  = { 0xF4, 0xF3, 0xF2, 0xF1 };
-static const uint8_t REPORT_TAIL[4] = { 0xF8, 0xF7, 0xF6, 0xF5 };
+static const uint8_t REPORT_HDR[4] = {0xF4, 0xF3, 0xF2, 0xF1};
+static const uint8_t REPORT_TAIL[4] = {0xF8, 0xF7, 0xF6, 0xF5};
 
 // Command: switch to Report mode.
 //   header(4) | len(2)=0x0008 | cmd(2)=0x0012 | param_id(2)=0x0000 |
 //   value(4)=0x00000004 | tail(4)
 static const uint8_t CMD_ENTER_REPORT_MODE[] = {
-    0xFD, 0xFC, 0xFB, 0xFA,
-    0x08, 0x00,
-    0x12, 0x00,
-    0x00, 0x00,
-    0x04, 0x00, 0x00, 0x00,
-    0x04, 0x03, 0x02, 0x01,
+    0xFD, 0xFC, 0xFB, 0xFA, 0x08, 0x00, 0x12, 0x00, 0x00,
+    0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x03, 0x02, 0x01,
 };
 
 esp_err_t dp_radar_init(void)
 {
     const uart_config_t cfg = {
-        .baud_rate  = RADAR_BAUD,
-        .data_bits  = UART_DATA_8_BITS,
-        .parity     = UART_PARITY_DISABLE,
-        .stop_bits  = UART_STOP_BITS_1,
-        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .baud_rate = RADAR_BAUD,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
     ESP_ERROR_CHECK(uart_driver_install(RADAR_PORT, RX_BUF_SZ * 2, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(RADAR_PORT, &cfg));
-    ESP_ERROR_CHECK(uart_set_pin(RADAR_PORT, RADAR_TX, RADAR_RX,
-                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(
+        uart_set_pin(RADAR_PORT, RADAR_TX, RADAR_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     ESP_LOGI(TAG, "uart%d tx=%d rx=%d baud=%d", RADAR_PORT, RADAR_TX, RADAR_RX, RADAR_BAUD);
 
     // Switch to Report mode. Module ACK is best-effort; flush any reply.
-    int written = uart_write_bytes(RADAR_PORT, CMD_ENTER_REPORT_MODE,
-                                   sizeof(CMD_ENTER_REPORT_MODE));
+    int written =
+        uart_write_bytes(RADAR_PORT, CMD_ENTER_REPORT_MODE, sizeof(CMD_ENTER_REPORT_MODE));
     if (written != (int)sizeof(CMD_ENTER_REPORT_MODE)) {
         ESP_LOGE(TAG, "mode-change write failed (%d/%u)", written,
                  (unsigned)sizeof(CMD_ENTER_REPORT_MODE));
@@ -82,23 +78,26 @@ esp_err_t dp_radar_init(void)
 // Returns ESP_OK on a valid frame, ESP_ERR_TIMEOUT if `timeout` elapsed.
 esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
 {
-    if (!out) return ESP_ERR_INVALID_ARG;
+    if (!out)
+        return ESP_ERR_INVALID_ARG;
 
     enum { SYNC_HDR, READ_LEN, READ_BODY } state = SYNC_HDR;
-    uint8_t  frame[MAX_FRAME];
-    size_t   frame_len = 0;
-    uint8_t  hdr_match = 0;
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len = 0;
+    uint8_t hdr_match = 0;
     uint16_t expected_body = 0;
 
     const TickType_t deadline = xTaskGetTickCount() + timeout;
 
     for (;;) {
         TickType_t now = xTaskGetTickCount();
-        if ((int32_t)(deadline - now) <= 0) return ESP_ERR_TIMEOUT;
+        if ((int32_t)(deadline - now) <= 0)
+            return ESP_ERR_TIMEOUT;
 
         uint8_t b;
         int n = uart_read_bytes(RADAR_PORT, &b, 1, deadline - now);
-        if (n <= 0) return ESP_ERR_TIMEOUT;
+        if (n <= 0)
+            return ESP_ERR_TIMEOUT;
 
         switch (state) {
         case SYNC_HDR:
@@ -144,10 +143,10 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
                 // body[1..2]= distance cm, LE
                 // body[3..] = energy gates (ignored here)
                 const uint8_t *body = &frame[sizeof(REPORT_HDR) + 2];
-                out->presence     = body[0] != 0;
-                out->distance_cm  = (uint16_t)body[1] | ((uint16_t)body[2] << 8);
+                out->presence = body[0] != 0;
+                out->distance_cm = (uint16_t)body[1] | ((uint16_t)body[2] << 8);
                 out->target_state = (int8_t)body[0];
-                out->ts_ms        = (uint32_t)(esp_timer_get_time() / 1000);
+                out->ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 return ESP_OK;
             }
             break;
@@ -155,16 +154,16 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     }
 }
 
-esp_err_t dp_radar_deinit(void)
-{
-    return uart_driver_delete(RADAR_PORT);
-}
+esp_err_t dp_radar_deinit(void) { return uart_driver_delete(RADAR_PORT); }
 
-#else  // !CONFIG_DOCKPULSE_ROLE_SENSOR — stub out for gateway build
+#else // !CONFIG_DOCKPULSE_ROLE_SENSOR — stub out for gateway build
 
 esp_err_t dp_radar_init(void) { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout) {
-    (void)out; (void)timeout; return ESP_ERR_NOT_SUPPORTED;
+esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
+{
+    (void)out;
+    (void)timeout;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 esp_err_t dp_radar_deinit(void) { return ESP_OK; }
 

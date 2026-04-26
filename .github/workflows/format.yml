@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jidicula/clang-format-action@v4.13.0
         with:
-          clang-format-version: "17"
+          clang-format-version: "20"
           check-path: "."
           exclude-regex: '^\./(build|managed_components)/.*'
 
