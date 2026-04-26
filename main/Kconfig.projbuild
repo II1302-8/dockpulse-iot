@@ -1,0 +1,60 @@
+menu "DockPulse"
+
+    choice DOCKPULSE_ROLE
+        prompt "Node role"
+        default DOCKPULSE_ROLE_SENSOR
+        help
+            Select whether this firmware image is a battery/solar-powered
+            sensor node (one per berth) or the mains-powered gateway.
+
+        config DOCKPULSE_ROLE_SENSOR
+            bool "Sensor (solar, deep sleep, mmWave radar)"
+
+        config DOCKPULSE_ROLE_GATEWAY
+            bool "Gateway (mains, always on, uplink)"
+    endchoice
+
+    config DOCKPULSE_NODE_ID
+        int "Node ID (unique within installation)"
+        range 1 255
+        default 1
+
+    menu "Sensor"
+        depends on DOCKPULSE_ROLE_SENSOR
+
+        config DOCKPULSE_RADAR_UART_PORT
+            int "Radar UART port number"
+            range 0 1
+            default 1
+
+        config DOCKPULSE_RADAR_UART_TX
+            int "Radar UART TX GPIO"
+            default 4
+
+        config DOCKPULSE_RADAR_UART_RX
+            int "Radar UART RX GPIO"
+            default 5
+
+        config DOCKPULSE_RADAR_UART_BAUD
+            int "Radar UART baud rate"
+            default 115200
+
+        config DOCKPULSE_SENSOR_PERIOD_MS
+            int "Sensor sample period (ms)"
+            default 60000
+            help
+                Wake interval between mmWave samples on sensor nodes.
+    endmenu
+
+    menu "Gateway"
+        depends on DOCKPULSE_ROLE_GATEWAY
+
+        config DOCKPULSE_GATEWAY_UPLINK_STUB
+            bool "Use uplink stub (log only)"
+            default y
+            help
+                When enabled the gateway logs samples to UART instead of
+                forwarding upstream. Disable when wiring real backend.
+    endmenu
+
+endmenu

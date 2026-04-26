@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.role }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [sensor, gateway]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select role
+        run: |
+          if [ "${{ matrix.role }}" = "gateway" ]; then
+            printf 'CONFIG_DOCKPULSE_ROLE_SENSOR=n\nCONFIG_DOCKPULSE_ROLE_GATEWAY=y\n' \
+              > sdkconfig.ci
+            echo "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ci" >> "$GITHUB_ENV"
+          else
+            echo "SDKCONFIG_DEFAULTS=sdkconfig.defaults" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32c3
+          command: idf.py -D SDKCONFIG_DEFAULTS="$SDKCONFIG_DEFAULTS" build
+
+      - name: Upload artefact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockpulse-${{ matrix.role }}-esp32c3
+          path: |
+            build/dockpulse.bin
+            build/dockpulse.elf
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 14

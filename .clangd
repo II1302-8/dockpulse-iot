@@ -1,0 +1,13 @@
+CompileFlags:
+  Remove:
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-jump-tables
+    - -mlongcalls
+    - -mtext-section-literals
+
+Diagnostics:
+  Suppress:
+    - drv_unknown_argument
+    - drv_unsupported_option_argument
+    - pp_file_not_found
