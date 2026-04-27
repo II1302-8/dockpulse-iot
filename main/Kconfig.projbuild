@@ -55,6 +55,55 @@ menu "DockPulse"
             help
                 When enabled the gateway logs samples to UART instead of
                 forwarding upstream. Disable when wiring real backend.
+
+        config DOCKPULSE_WIFI_SSID
+            string "Wi-Fi SSID"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default ""
+
+        config DOCKPULSE_WIFI_PASSWORD
+            string "Wi-Fi password"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default ""
+
+        config DOCKPULSE_MQTT_BROKER_URI
+            string "MQTT broker URI"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default "mqtt://mosquitto.local:1883"
+            help
+                Broker URI. Use mqtt:// for plaintext (dev/staging — see
+                ADR 001) or mqtts:// for TLS / mTLS (prod). mTLS client
+                certificate provisioning lands in a separate issue.
+
+        config DOCKPULSE_MQTT_TOPIC_BASE
+            string "MQTT publish topic base"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default "dockpulse/status"
+            help
+                Berth status topic is "<base>/<berth_id>" where berth_id
+                is the BLE mesh source unicast address as four lowercase
+                hex digits (e.g. dockpulse/status/00a3).
+
+        config DOCKPULSE_MQTT_QOS
+            int "MQTT publish QoS"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            range 0 2
+            default 1
+
+        config DOCKPULSE_MQTT_CLIENT_ID
+            string "MQTT client ID (empty = chip-derived)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default ""
+
+        config DOCKPULSE_MQTT_SELFTEST
+            bool "Publish a synthetic sample after broker connect"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default n
+            help
+                Emit one fake berth_status_t to the configured topic
+                once MQTT connects. Useful for end-to-end smoke tests
+                before the mesh receive path is wired up. Leave off in
+                production.
     endmenu
 
 endmenu

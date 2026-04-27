@@ -27,6 +27,17 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
+Convenience wrappers (auto-source ESP-IDF, auto-detect port):
+
+```bash
+tools/flash.sh             # build + flash
+tools/monitor.sh           # serial monitor (Ctrl-] to exit)
+tools/run.sh               # build + flash + monitor
+```
+
+Pass an explicit port as the first argument if multiple devices are
+attached: `tools/run.sh /dev/cu.usbmodem101`.
+
 Default role is sensor. For gateway, toggle in `menuconfig` or set
 `CONFIG_DOCKPULSE_ROLE_GATEWAY=y` in `sdkconfig`.
 
@@ -48,7 +59,8 @@ main/                 role dispatch + per-role event loops
 components/dp_common  shared types
 components/dp_radar   HMMD UART driver
 components/dp_mesh    NimBLE Mesh wrapper
-components/dp_gateway uplink
+components/dp_gateway uplink (Wi-Fi STA + MQTT publish)
+tools/                dev convenience scripts (flash, monitor, run)
 ```
 
 ## Code style
