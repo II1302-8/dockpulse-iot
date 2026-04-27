@@ -56,7 +56,8 @@ esp_err_t dp_gateway_mqtt_start_and_wait(void)
     if (!s_client) {
         return ESP_FAIL;
     }
-    ESP_ERROR_CHECK(esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, &on_mqtt_event, NULL));
+    ESP_ERROR_CHECK(
+        esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, &on_mqtt_event, NULL));
     ESP_ERROR_CHECK(esp_mqtt_client_start(s_client));
 
     EventBits_t bits = xEventGroupWaitBits(s_mqtt_events, MQTT_CONNECTED_BIT, pdFALSE, pdTRUE,
