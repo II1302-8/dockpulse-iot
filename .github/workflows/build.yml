@@ -2,8 +2,11 @@ name: Build
 
 on:
   push:
-    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -34,7 +37,7 @@ jobs:
           command: idf.py -D SDKCONFIG_DEFAULTS="$SDKCONFIG_DEFAULTS" build
 
       - name: Upload artefact
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: dockpulse-${{ matrix.role }}-esp32c3
