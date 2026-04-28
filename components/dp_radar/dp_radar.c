@@ -120,6 +120,30 @@ static esp_err_t read_command_ack(uint16_t req_cmd, TickType_t timeout)
     }
 }
 
+// Send the mode-change command. Idempotent — safe to call repeatedly
+// for recovery when the module appears to have stopped streaming.
+// Logs ACK status. Flushes any data the module dribbled back.
+esp_err_t dp_radar_enter_report_mode(void)
+{
+    int written =
+        uart_write_bytes(RADAR_PORT, CMD_ENTER_REPORT_MODE, sizeof(CMD_ENTER_REPORT_MODE));
+    if (written != (int)sizeof(CMD_ENTER_REPORT_MODE)) {
+        ESP_LOGE(TAG, "mode-change write failed (%d/%u)", written,
+                 (unsigned)sizeof(CMD_ENTER_REPORT_MODE));
+        return ESP_FAIL;
+    }
+    uart_wait_tx_done(RADAR_PORT, pdMS_TO_TICKS(100));
+
+    esp_err_t ack = read_command_ack(0x0012, pdMS_TO_TICKS(500));
+    if (ack != ESP_OK) {
+        ESP_LOGW(TAG, "mode-change ACK not seen (%s)", esp_err_to_name(ack));
+    } else {
+        ESP_LOGI(TAG, "mode-change ACK ok (Report mode)");
+    }
+    uart_flush_input(RADAR_PORT);
+    return ack;
+}
+
 esp_err_t dp_radar_init(void)
 {
     const uart_config_t cfg = {
@@ -136,27 +160,10 @@ esp_err_t dp_radar_init(void)
         uart_set_pin(RADAR_PORT, RADAR_TX, RADAR_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     ESP_LOGI(TAG, "uart%d tx=%d rx=%d baud=%d", RADAR_PORT, RADAR_TX, RADAR_RX, RADAR_BAUD);
 
-    // Switch to Report mode. Module ACK is best-effort; flush any reply.
-    int written =
-        uart_write_bytes(RADAR_PORT, CMD_ENTER_REPORT_MODE, sizeof(CMD_ENTER_REPORT_MODE));
-    if (written != (int)sizeof(CMD_ENTER_REPORT_MODE)) {
-        ESP_LOGE(TAG, "mode-change write failed (%d/%u)", written,
-                 (unsigned)sizeof(CMD_ENTER_REPORT_MODE));
-        return ESP_FAIL;
-    }
-    uart_wait_tx_done(RADAR_PORT, pdMS_TO_TICKS(100));
-
-    esp_err_t ack = read_command_ack(0x0012, pdMS_TO_TICKS(500));
-    if (ack != ESP_OK) {
-        // The module may already be in Report mode from a previous boot,
-        // in which case the missing ACK is harmless. Failures here are
-        // most often a wiring/baud problem, which dp_radar_read() will
-        // surface as repeated timeouts. Don't fail init on this alone.
-        ESP_LOGW(TAG, "mode-change ACK not seen (%s) — continuing", esp_err_to_name(ack));
-    } else {
-        ESP_LOGI(TAG, "mode-change ACK ok (Report mode)");
-    }
-    uart_flush_input(RADAR_PORT);
+    // Best-effort. Failure here is most often a wiring/baud problem,
+    // which dp_radar_read() will surface as repeated timeouts and the
+    // sensor loop will recover from by re-sending the command.
+    dp_radar_enter_report_mode();
     return ESP_OK;
 }
 
@@ -166,6 +173,15 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
 {
     if (!out)
         return ESP_ERR_INVALID_ARG;
+
+    // The HMMD streams ~14 KB/s in Report mode (~10 frames × ~45 B each
+    // every 100 ms). Our 2 KB RX FIFO overflows within ~140 ms, so by
+    // the time the sensor task wakes from its multi-second period the
+    // buffer holds stale, mid-frame garbage from an indeterminate
+    // overflow point. Flushing here forces the parser to re-sync
+    // against the next freshly-received frame instead of chewing
+    // through KB of out-of-band bytes hunting for a header.
+    uart_flush_input(RADAR_PORT);
 
     enum { SYNC_HDR, READ_LEN, READ_BODY } state = SYNC_HDR;
     uint8_t frame[MAX_FRAME];

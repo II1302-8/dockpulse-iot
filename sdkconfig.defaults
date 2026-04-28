@@ -22,10 +22,32 @@ CONFIG_BLE_MESH_PB_ADV=y
 # CONFIG_BLE_MESH_GATT_PROXY_SERVER is not set
 CONFIG_BLE_MESH_RELAY=y
 CONFIG_BLE_MESH_USE_DUPLICATE_SCAN=y
+# Default 1 saturates fast when publishes overlap. 10 matches the
+# vendor_models example and gives plenty of headroom even at <1s
+# publish cadence.
+CONFIG_BLE_MESH_TX_SEG_MSG_COUNT=10
+CONFIG_BLE_MESH_RX_SEG_MSG_COUNT=10
+
+# Persist subnet, app keys, model bindings, and the per-source sequence
+# counter to NVS. Without this the sensor restarts seq at 0 after every
+# power cycle and the gateway's replay-protection list rejects the
+# resulting low-seq packets as replays — silent data loss for any
+# sensor that legitimately reboots (deep sleep, brown-out, hard
+# repower).
+CONFIG_BLE_MESH_SETTINGS=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y
+
+# Route the console to USB-Serial-JTAG instead of UART0. UART0's TX
+# FIFO blocks the writer task when no host is reading; the sensor's
+# per-cycle ESP_LOGI calls (including the RADAR CSV trace) hang the
+# publish loop until tools/monitor.sh opens the port. USB-Serial-JTAG
+# drops bytes silently when no host is attached, so the application
+# task keeps running.
+# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # NimBLE GAP logs every advertise stop/start at INFO. The mesh stack
 # cycles these every ~100ms so they drown the application logs.

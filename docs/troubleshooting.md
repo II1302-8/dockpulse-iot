@@ -79,15 +79,11 @@ W BLE_MESH: Replay: src 0x0003 dst 0xc000 seq 0x000001
 ...
 ```
 
-The RPL persists in NVS. After re-flashing a sensor with cleared NVS its seq counter restarts at 0, but the gateway's RPL still remembers the old high-water mark.
+The gateway's RPL is persisted in NVS and survives reboots. By default the **sensor's** seq counter does *not* persist — so every sensor power cycle restarts seq at 0, the gateway sees those as old and drops them as replays. Silent data loss for solar / sleeping nodes.
 
-**Fix:** `idf.py erase-flash` on the gateway (or both boards). The helper scripts have `--erase` to do this in one shot:
+**Fix:** `CONFIG_BLE_MESH_SETTINGS=y` in `sdkconfig.defaults` makes the mesh stack persist subnet, app keys, model bindings, *and* the per-source seq counter to NVS. Sensor reboots resume seq from where it left off; gateway's RPL stays in sync. Already enabled in this repo's defaults.
 
-```bash
-tools/run.sh -r gateway -p /dev/cu.usbmodem21 -n 1 --erase
-```
-
-In production this won't matter — sensors don't re-flash and the gateway's RPL grows monotonically with the real sensor's seq counter.
+For a clean-slate development scenario where you've flashed new firmware on both sides and just want to throw away all mesh state, `tools/run.sh ... --erase` does the equivalent of `idf.py erase-flash` before flashing. Don't use `--erase` in normal operation — it wipes the persisted seq state and re-introduces the original problem.
 
 ## NimBLE GAP log spam
 

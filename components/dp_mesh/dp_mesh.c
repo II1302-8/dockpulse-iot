@@ -252,6 +252,13 @@ static void register_phantom_peer(uint16_t addr)
     if (addr == s_local_addr) {
         return;
     }
+    // With CONFIG_BLE_MESH_SETTINGS=y the node DB is restored from NVS
+    // on boot, so peers from a previous session are already registered.
+    // Re-registering would fail with EEXIST — skip cleanly instead.
+    if (esp_ble_mesh_provisioner_get_node_with_addr(addr)) {
+        ESP_LOGI(TAG, "phantom peer 0x%04x already in DB", addr);
+        return;
+    }
     bt_mesh_addr_t bd_addr = {0};
     uint8_t uuid[16] = {'d', 'p', '-', 'p', 'h', 'a', 'n', 't', 'o', 'm', 0};
     uuid[14] = (uint8_t)(addr & 0xFF);

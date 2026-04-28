@@ -45,7 +45,12 @@ echo "Flash role=$ROLE port=$PORT dir=$BUILD_DIR sdkconfig=$SDKCONFIG erase=${ER
 sync_sdkconfig "$SDKCONFIG" "$ROLE" "$NODE_ID" "$FAKE_RADAR"
 
 if [[ -n "$ERASE" ]]; then
-    idf.py -B "$BUILD_DIR" -DSDKCONFIG="$SDKCONFIG" -p "$PORT" -b 460800 erase-flash
+    # ESP32-C3 ROM doesn't expose `erase_flash` over USB-Serial-JTAG
+    # (idf.py auto-disables the flasher stub on USB). Erase just the
+    # NVS partition via esptool's ROM-supported `erase_region`.
+    # Offset/size from partitions.csv: nvs @ 0x9000, 0x6000 bytes.
+    python -m esptool --chip esp32c3 --port "$PORT" --baud 460800 --no-stub \
+        erase_region 0x9000 0x6000
 fi
 
 exec idf.py -B "$BUILD_DIR" \
