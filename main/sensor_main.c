@@ -7,19 +7,18 @@
 #include "dp_common.h"
 #include "dp_mesh.h"
 #include "dp_radar.h"
+#include "dp_radar_filter.h"
 
 static const char *TAG = "sensor";
 
-static berth_status_t to_status(const dp_radar_sample_t *s, uint8_t node_id)
+static berth_status_t to_status(const dp_radar_sample_t *s, bool occupied, uint8_t node_id)
 {
     return (berth_status_t){
         .node_id = node_id,
         // 1:1 sensor-to-berth mapping for now. When that changes,
         // route node_id → berth_id through a config lookup here.
         .berth_id = node_id,
-        // Until the boat-detection logic from the field-test data
-        // lands, fall back to the radar's human-tuned presence flag.
-        .occupied = s->presence,
+        .occupied = occupied,
         .sensor_raw_mm = (uint16_t)(s->distance_cm * 10u),
         // Battery monitoring not yet wired (no ADC divider on the
         // current hardware revision).
@@ -78,9 +77,15 @@ void dp_sensor_run(void)
         }
         consecutive_failures = 0;
 
+        // Evaluate every read so the proximity stability window sees
+        // a continuous frame stream, not the sparse one
+        // CONFIG_DOCKPULSE_SENSOR_PERIOD_MS would give.
+        bool near = dp_radar_filter_near(&s);
+
         TickType_t now = xTaskGetTickCount();
         if (last_publish == 0 || (now - last_publish) >= publish_interval) {
-            ESP_LOGI(TAG, "presence=%d distance_cm=%u", s.presence, s.distance_cm);
+            ESP_LOGI(TAG, "presence=%d distance_cm=%u near=%d",
+                     s.presence, s.distance_cm, (int)near);
             // Field-test trace: one CSV-style line per published sample
             // so logs can be grepped (`grep ',RADAR,' …`) and fed to a
             // plotter to set per-berth gate thresholds.
@@ -93,7 +98,7 @@ void dp_sensor_run(void)
                      s.gate_energy[9], s.gate_energy[10], s.gate_energy[11], s.gate_energy[12],
                      s.gate_energy[13], s.gate_energy[14], s.gate_energy[15]);
 
-            berth_status_t status = to_status(&s, node_id);
+            berth_status_t status = to_status(&s, near, node_id);
             dp_mesh_publish_status(&status);
             last_publish = now;
         }

@@ -59,6 +59,30 @@ menu "DockPulse"
             default 60000
             help
                 Wake interval between mmWave samples on sensor nodes.
+
+        menu "Proximity"
+
+            config DOCKPULSE_PROXIMITY_CM
+                int "Proximity threshold (cm)"
+                range 1 1000
+                default 30
+                help
+                    Berth reports `occupied` when the radar measures a
+                    target closer than this. The HMMD's distance
+                    estimator is reliable in the near field (high SNR),
+                    so a simple distance threshold is enough — no
+                    background subtraction or gate-energy filtering
+                    needed.
+
+            config DOCKPULSE_PROXIMITY_STABILITY_FRAMES
+                int "Consecutive in-range frames required"
+                range 1 16
+                default 2
+                help
+                    Suppresses single-frame jitter. At the 200 ms read
+                    cadence, 2 frames is ~400 ms.
+
+        endmenu
     endmenu
 
     menu "Gateway"
