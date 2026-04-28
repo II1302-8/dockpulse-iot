@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
-# Open serial monitor. Auto-detects ESP32-C3 on /dev/cu.usbmodem*.
-# Usage: tools/monitor.sh [PORT]
+# Open serial monitor on a port. No build dir needed — pure UART tap.
+#
+# Usage:
+#   tools/monitor.sh [-p PORT] [-r gateway|sensor]
+#
+# --role only matters if you want symbol decoding from the elf in the
+# corresponding build dir. Without --role, falls back to the default
+# build/.
 # Exit the monitor with Ctrl-].
-set -euo pipefail
+
+print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cd "$(dirname "$0")/.."
+. tools/_common.sh
 
-if ! command -v idf.py >/dev/null 2>&1; then
-    : "${IDF_PATH:=$HOME/esp/esp-idf}"
-    if [[ ! -f "$IDF_PATH/export.sh" ]]; then
-        echo "ESP-IDF not found at $IDF_PATH. Set IDF_PATH or install per CONTRIBUTING.md." >&2
-        exit 1
-    fi
-    # shellcheck source=/dev/null
-    . "$IDF_PATH/export.sh" >/dev/null
-fi
+parse_args "$@"
+activate_idf
+require_port "$PORT"
 
-if [[ $# -ge 1 ]]; then
-    PORT="$1"
-else
-    PORT="$(ls /dev/cu.usbmodem* 2>/dev/null | head -n1 || true)"
-    if [[ -z "$PORT" ]]; then
-        echo "No /dev/cu.usbmodem* device found. Plug in the ESP32-C3 or pass a port." >&2
-        exit 1
-    fi
-fi
+BUILD_DIR="$(build_dir_for "$ROLE")"
+SDKCONFIG="$(sdkconfig_for "$ROLE")"
 
-echo "Monitoring $PORT (Ctrl-] to exit)"
-exec idf.py -p "$PORT" monitor
+echo "Monitor role=$ROLE port=$PORT dir=$BUILD_DIR (Ctrl-] to exit)"
+
+exec idf.py -B "$BUILD_DIR" -DSDKCONFIG="$SDKCONFIG" -p "$PORT" monitor
