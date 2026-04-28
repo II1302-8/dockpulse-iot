@@ -1,6 +1,8 @@
 # ESP-IDF build output
 build/
+build_sensor/
 sdkconfig
+sdkconfig.sensor
 sdkconfig.old
 
 # IDF component manager (regenerated on demand)
