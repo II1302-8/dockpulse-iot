@@ -90,14 +90,21 @@ menu "DockPulse"
                 ADR 001) or mqtts:// for TLS / mTLS (prod). mTLS client
                 certificate provisioning lands in a separate issue.
 
-        config DOCKPULSE_MQTT_TOPIC_BASE
-            string "MQTT publish topic base"
+        config DOCKPULSE_HARBOR_ID
+            string "Harbor identifier (topic segment)"
             depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
-            default "dockpulse/status"
+            default "main"
             help
-                Berth status topic is "<base>/<berth_id>" where berth_id
-                is the BLE mesh source unicast address as four lowercase
-                hex digits (e.g. dockpulse/status/00a3).
+                Used as the {harbor_id} segment of the MQTT topic.
+                Topic format is harbor/{harbor_id}/{dock_id}/{berth_id}/status
+                per docs/api/mqtt-contract.yml in the dockpulse repo.
+
+        config DOCKPULSE_DOCK_ID
+            string "Dock identifier (topic segment)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default "dock-a"
+            help
+                Used as the {dock_id} segment of the MQTT topic.
 
         config DOCKPULSE_MQTT_QOS
             int "MQTT publish QoS"
