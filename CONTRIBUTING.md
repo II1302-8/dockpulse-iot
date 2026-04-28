@@ -1,69 +1,53 @@
 # Contributing
 
-## Toolchain
+Quick reference for contributors. For deeper material see:
 
-Targets **ESP-IDF v5.3.2** for ESP32-C3. One-time install:
+- [docs/architecture.md](docs/architecture.md) — what the firmware does and why
+- [docs/development.md](docs/development.md) — toolchain install, helper scripts, bench-testing
+- [docs/troubleshooting.md](docs/troubleshooting.md) — known IDF gotchas and how to recover
 
-```bash
-brew install cmake ninja dfu-util ccache libusb python
-git clone -b v5.3.2 --recursive --depth 1 --shallow-submodules \
-    https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-~/esp/esp-idf/install.sh esp32c3
-```
+## Before you push
 
-Activate per shell:
+- Both roles must build cleanly:
+  ```bash
+  tools/build.sh -r gateway -n 1
+  tools/build.sh -r sensor  -n 2 --fake
+  ```
+- `.clang-format` and `.editorconfig` are checked in — please run them
+  before committing. Don't commit `sdkconfig` or `sdkconfig.sensor`
+  (both are generated and `.gitignore`d).
+- Don't commit `build/` or `build_sensor/`.
 
-```bash
-. $HOME/esp/esp-idf/export.sh
-```
+## Commit style
 
-Tip — add `alias get_idf='. $HOME/esp/esp-idf/export.sh'` to `~/.zshrc`.
+We follow Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`,
+etc.). Subject ≤72 chars, body explains _why_ when it isn't obvious.
 
-## Build
+## PR checklist
 
-```bash
-idf.py menuconfig          # DockPulse → Node role
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash monitor
-```
+- [ ] Both roles build (`tools/build.sh -r gateway -n 1` and
+      `tools/build.sh -r sensor -n 2 --fake`).
+- [ ] If you touched `dp_mesh`, you bench-tested mesh rx end-to-end
+      with two boards and `--fake` sensor.
+- [ ] If you touched the wire format (`berth_status_t` or pack/unpack),
+      you also updated `docs/architecture.md` and the matching JSON
+      mapping in `dp_gateway.c`.
+- [ ] If you touched the helper scripts under `tools/`, you also
+      updated `docs/development.md`.
+- [ ] If you discovered a new IDF gotcha, you added it to
+      `docs/troubleshooting.md`.
 
-Convenience wrappers (auto-source ESP-IDF, auto-detect port):
+## Things to be careful about
 
-```bash
-tools/flash.sh             # build + flash
-tools/monitor.sh           # serial monitor (Ctrl-] to exit)
-tools/run.sh               # build + flash + monitor
-```
-
-Pass an explicit port as the first argument if multiple devices are
-attached: `tools/run.sh /dev/cu.usbmodem101`.
-
-Default role is sensor. For gateway, toggle in `menuconfig` or set
-`CONFIG_DOCKPULSE_ROLE_GATEWAY=y` in `sdkconfig`.
-
-Sensor- and gateway-only sources are gated with
-`#if CONFIG_DOCKPULSE_ROLE_SENSOR` / `_GATEWAY`, so the unused role's
-code does not link into the image. Both roles must build green —
-verify with:
-
-```bash
-rm -f sdkconfig && idf.py build                                       # sensor
-printf 'CONFIG_DOCKPULSE_ROLE_SENSOR=n\nCONFIG_DOCKPULSE_ROLE_GATEWAY=y\n' \
-    >> sdkconfig && idf.py build                                       # gateway
-```
-
-## Layout
-
-```
-main/                 role dispatch + per-role event loops
-components/dp_common  shared types
-components/dp_radar   HMMD UART driver
-components/dp_mesh    NimBLE Mesh wrapper
-components/dp_gateway uplink (Wi-Fi STA + MQTT publish)
-tools/                dev convenience scripts (flash, monitor, run)
-```
-
-## Code style
-
-`.clang-format` and `.editorconfig` are checked in — please run them
-before committing. Don't commit `sdkconfig` (generated).
+- `SDKCONFIG_DEFAULTS` is only consulted when the role's sdkconfig is
+  generated for the first time. The helper scripts mutate the existing
+  sdkconfig in-place via `sync_sdkconfig` in `tools/_common.sh`. If
+  you bypass the helpers, edit the sdkconfig directly or delete it.
+- The mesh stack's NVS state (RPL, provisioning data) survives across
+  reflashes. After a sensor is re-flashed and starts emitting seq=0
+  again, the gateway will reject the packets as replays. Use
+  `--erase` on the helper scripts (or `idf.py erase-flash`) when in
+  doubt.
+- We use `esp_ble_mesh`, **not** the NimBLE-mesh port. See
+  [docs/troubleshooting.md](docs/troubleshooting.md#mesh-stack-choice)
+  before changing anything in `components/dp_mesh/`.

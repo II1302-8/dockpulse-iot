@@ -22,21 +22,36 @@ menu "DockPulse"
     menu "Sensor"
         depends on DOCKPULSE_ROLE_SENSOR
 
+        config DOCKPULSE_RADAR_FAKE
+            bool "Use fake radar (no hardware required)"
+            default n
+            help
+                When enabled, dp_radar_read() returns synthetic samples
+                instead of talking to the HMMD module over UART. Useful
+                for bench-testing the mesh / gateway / MQTT path on a
+                bare ESP32-C3 with no sensor attached. The fake walks
+                the distance from 200 cm to 780 cm in a 30-sample cycle
+                and toggles `presence` accordingly.
+
         config DOCKPULSE_RADAR_UART_PORT
+            depends on !DOCKPULSE_RADAR_FAKE
             int "Radar UART port number"
             range 0 1
             default 1
 
         config DOCKPULSE_RADAR_UART_TX
             int "Radar UART TX GPIO"
+            depends on !DOCKPULSE_RADAR_FAKE
             default 4
 
         config DOCKPULSE_RADAR_UART_RX
             int "Radar UART RX GPIO"
+            depends on !DOCKPULSE_RADAR_FAKE
             default 5
 
         config DOCKPULSE_RADAR_UART_BAUD
             int "Radar UART baud rate"
+            depends on !DOCKPULSE_RADAR_FAKE
             default 115200
 
         config DOCKPULSE_SENSOR_PERIOD_MS

@@ -1,30 +1,58 @@
 #!/usr/bin/env bash
-# Build + flash + monitor in one shot.
-# Usage: tools/run.sh [PORT]
+# Build + flash + monitor for one role on one port.
+#
+# Usage:
+#   tools/run.sh [-r gateway|sensor] [-p PORT] [-n NODE_ID] [--fake|--real] [--erase]
+#
+# --erase wipes the board's flash before flashing the new image.
+# Useful when the mesh stack's NVS state (RPL, provisioning data) is
+# stale and you want to start fresh.
+#
+# Examples:
+#   tools/run.sh -r gateway -p /dev/cu.usbmodem21
+#   tools/run.sh -r sensor  -p /dev/cu.usbmodem11 -n 2 --fake
+#   tools/run.sh -r sensor  -p /dev/cu.usbmodem11 -n 2 --fake --erase
+#
 # Exit the monitor with Ctrl-].
-set -euo pipefail
+
+print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cd "$(dirname "$0")/.."
+. tools/_common.sh
 
-if ! command -v idf.py >/dev/null 2>&1; then
-    : "${IDF_PATH:=$HOME/esp/esp-idf}"
-    if [[ ! -f "$IDF_PATH/export.sh" ]]; then
-        echo "ESP-IDF not found at $IDF_PATH. Set IDF_PATH or install per CONTRIBUTING.md." >&2
-        exit 1
+parse_args "$@"
+activate_idf
+require_port "$PORT"
+
+BUILD_DIR="$(build_dir_for "$ROLE")"
+SDKCONFIG="$(sdkconfig_for "$ROLE")"
+
+OVERRIDE="$(mktemp -t dp_run_XXXX.cfg)"
+trap 'rm -f "$OVERRIDE"' EXIT
+case "$ROLE" in
+    gateway) echo "CONFIG_DOCKPULSE_ROLE_GATEWAY=y" >>"$OVERRIDE" ;;
+    sensor)  echo "CONFIG_DOCKPULSE_ROLE_SENSOR=y"  >>"$OVERRIDE" ;;
+esac
+if [[ -n "$NODE_ID" ]]; then
+    echo "CONFIG_DOCKPULSE_NODE_ID=$NODE_ID" >>"$OVERRIDE"
+fi
+if [[ "$ROLE" == "sensor" && -n "$FAKE_RADAR" ]]; then
+    if [[ "$FAKE_RADAR" == y ]]; then
+        echo "CONFIG_DOCKPULSE_RADAR_FAKE=y" >>"$OVERRIDE"
+    else
+        echo "# CONFIG_DOCKPULSE_RADAR_FAKE is not set" >>"$OVERRIDE"
     fi
-    # shellcheck source=/dev/null
-    . "$IDF_PATH/export.sh" >/dev/null
 fi
 
-if [[ $# -ge 1 ]]; then
-    PORT="$1"
-else
-    PORT="$(ls /dev/cu.usbmodem* 2>/dev/null | head -n1 || true)"
-    if [[ -z "$PORT" ]]; then
-        echo "No /dev/cu.usbmodem* device found. Plug in the ESP32-C3 or pass a port." >&2
-        exit 1
-    fi
+echo "Run role=$ROLE port=$PORT dir=$BUILD_DIR sdkconfig=$SDKCONFIG erase=${ERASE:-n} (Ctrl-] to exit)"
+
+sync_sdkconfig "$SDKCONFIG" "$ROLE" "$NODE_ID" "$FAKE_RADAR"
+
+if [[ -n "$ERASE" ]]; then
+    idf.py -B "$BUILD_DIR" -DSDKCONFIG="$SDKCONFIG" -p "$PORT" -b 460800 erase-flash
 fi
 
-echo "Flash + monitor on $PORT (Ctrl-] to exit)"
-exec idf.py -p "$PORT" -b 460800 flash monitor
+exec idf.py -B "$BUILD_DIR" \
+    -DSDKCONFIG="$SDKCONFIG" \
+    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;$OVERRIDE" \
+    -p "$PORT" -b 460800 flash monitor
