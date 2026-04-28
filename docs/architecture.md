@@ -122,9 +122,16 @@ the bounds-checked codec.
 ### MQTT JSON
 
 The gateway converts `berth_status_t` to the JSON schema documented in
-`docs/api/mqtt-contract.yml` (in the parent `docs/` dir, not this
-firmware repo) under topic `<base>/<berth_id>` (default
-`dockpulse/status/berth-002`):
+`docs/api/mqtt-contract.yml` (in the parent `dockpulse` repo, not this
+firmware repo) under topic
+`harbor/{harbor_id}/{dock_id}/{berth_id}/status` (default
+`harbor/main/dock-a/berth-002/status`). `harbor_id` and `dock_id` are
+configurable via `CONFIG_DOCKPULSE_HARBOR_ID` and
+`CONFIG_DOCKPULSE_DOCK_ID`; the backend's parser (`backend/app/mqtt.py`)
+requires exactly five `/`-separated segments starting with `harbor/`,
+so the prefix shape is mandatory.
+
+Example payload:
 
 ```json
 {

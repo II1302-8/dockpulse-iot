@@ -78,8 +78,14 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     snprintf(berth_id, sizeof(berth_id), "berth-%03u", s->berth_id);
     now_iso8601(ts_iso, sizeof(ts_iso));
 
+    // Topic format per docs/api/mqtt-contract.yml in the dockpulse repo:
+    //   harbor/{harbor_id}/{dock_id}/{berth_id}/status
+    // Backend's _parse_berth_topic (backend/app/mqtt.py) requires exactly
+    // 5 path segments starting with "harbor/" or it silently drops the
+    // message.
     char topic[96];
-    snprintf(topic, sizeof(topic), "%s/%s", CONFIG_DOCKPULSE_MQTT_TOPIC_BASE, berth_id);
+    snprintf(topic, sizeof(topic), "harbor/%s/%s/%s/status", CONFIG_DOCKPULSE_HARBOR_ID,
+             CONFIG_DOCKPULSE_DOCK_ID, berth_id);
 
     cJSON *root = cJSON_CreateObject();
     if (!root)
