@@ -5,6 +5,7 @@
 #if CONFIG_DOCKPULSE_ROLE_GATEWAY
 
 #include <stdio.h>
+#include <time.h>
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -12,6 +13,18 @@
 #include "dp_gateway_priv.h"
 
 static const char *TAG = "dp_gateway";
+
+// Format the gateway's current wallclock as ISO 8601 UTC. If the system
+// clock has not been set yet (no SNTP), this returns a 1970-epoch
+// stamp — that's intentional: the backend is the source of truth on
+// timestamps and can detect the unset-clock case.
+static void now_iso8601(char *out, size_t cap)
+{
+    time_t now = time(NULL);
+    struct tm tm_utc;
+    gmtime_r(&now, &tm_utc);
+    strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+}
 
 esp_err_t dp_gateway_init(void)
 {
@@ -35,33 +48,50 @@ esp_err_t dp_gateway_init(void)
         return err;
     }
 #if CONFIG_DOCKPULSE_MQTT_SELFTEST
-    dp_radar_sample_t fake = {.presence = true, .distance_cm = 123, .target_state = 1, .ts_ms = 0};
+    berth_status_t fake = {
+        .node_id = (uint8_t)CONFIG_DOCKPULSE_NODE_ID,
+        .berth_id = (uint16_t)CONFIG_DOCKPULSE_NODE_ID,
+        .occupied = true,
+        .sensor_raw_mm = 1230,
+        .battery_pct = DP_BATTERY_UNKNOWN,
+        .ts_ms = 0,
+    };
     dp_gateway_uplink(&fake, (uint16_t)CONFIG_DOCKPULSE_NODE_ID);
 #endif
     return ESP_OK;
 #endif
 }
 
-esp_err_t dp_gateway_uplink(const dp_radar_sample_t *s, uint16_t src_addr)
+esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
 {
     if (!s)
         return ESP_ERR_INVALID_ARG;
 #if CONFIG_DOCKPULSE_GATEWAY_UPLINK_STUB
-    ESP_LOGI(TAG, "uplink-stub src=0x%04x presence=%d distance_cm=%u ts=%lu", src_addr, s->presence,
-             s->distance_cm, (unsigned long)s->ts_ms);
+    ESP_LOGI(TAG, "uplink-stub src=0x%04x node=%u berth=%u occupied=%d raw_mm=%u ts=%lu", src_addr,
+             s->node_id, s->berth_id, s->occupied, s->sensor_raw_mm, (unsigned long)s->ts_ms);
     return ESP_OK;
 #else
+    char node_id[16];
+    char berth_id[16];
+    char ts_iso[32];
+    snprintf(node_id, sizeof(node_id), "node-%03u", s->node_id);
+    snprintf(berth_id, sizeof(berth_id), "berth-%03u", s->berth_id);
+    now_iso8601(ts_iso, sizeof(ts_iso));
+
     char topic[96];
-    snprintf(topic, sizeof(topic), "%s/%04x", CONFIG_DOCKPULSE_MQTT_TOPIC_BASE, src_addr);
+    snprintf(topic, sizeof(topic), "%s/%s", CONFIG_DOCKPULSE_MQTT_TOPIC_BASE, berth_id);
 
     cJSON *root = cJSON_CreateObject();
     if (!root)
         return ESP_ERR_NO_MEM;
-    cJSON_AddNumberToObject(root, "berth_id", src_addr);
-    cJSON_AddBoolToObject(root, "presence", s->presence);
-    cJSON_AddNumberToObject(root, "distance_cm", s->distance_cm);
-    cJSON_AddNumberToObject(root, "target_state", s->target_state);
-    cJSON_AddNumberToObject(root, "ts_ms", s->ts_ms);
+    cJSON_AddStringToObject(root, "node_id", node_id);
+    cJSON_AddStringToObject(root, "berth_id", berth_id);
+    cJSON_AddBoolToObject(root, "occupied", s->occupied);
+    cJSON_AddNumberToObject(root, "sensor_raw", s->sensor_raw_mm);
+    if (s->battery_pct != DP_BATTERY_UNKNOWN) {
+        cJSON_AddNumberToObject(root, "battery_pct", s->battery_pct);
+    }
+    cJSON_AddStringToObject(root, "timestamp", ts_iso);
 
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -80,7 +110,7 @@ esp_err_t dp_gateway_uplink(const dp_radar_sample_t *s, uint16_t src_addr)
 #else // !CONFIG_DOCKPULSE_ROLE_GATEWAY — stub out for sensor build
 
 esp_err_t dp_gateway_init(void) { return ESP_OK; }
-esp_err_t dp_gateway_uplink(const dp_radar_sample_t *s, uint16_t src_addr)
+esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
 {
     (void)s;
     (void)src_addr;

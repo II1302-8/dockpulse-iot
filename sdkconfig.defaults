@@ -1,18 +1,37 @@
 # Target
 CONFIG_IDF_TARGET="esp32c3"
 
-# Bluetooth + NimBLE host with Mesh
+# Bluetooth + NimBLE host (no NimBLE-mesh — its FreeRTOS port is
+# incomplete: per-buffer adv events are never ble_npl_event_init'd and
+# the legacy adv worker is gated #ifdef MYNEWT, so the first publish
+# crashes). We use Espressif's esp_ble_mesh stack instead — same
+# Bluetooth Mesh on the wire, but a thoroughly-tested implementation
+# that also runs on the NimBLE host.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BT_NIMBLE_MESH=y
-CONFIG_BT_NIMBLE_MESH_PROXY=y
-CONFIG_BT_NIMBLE_MESH_PB_ADV=y
-CONFIG_BT_NIMBLE_MESH_PB_GATT=y
-CONFIG_BT_NIMBLE_MESH_RELAY=y
+# CONFIG_BT_NIMBLE_MESH is not set
+
+# esp_ble_mesh — node + provisioner, both enabled. We use the
+# provisioner role to self-configure each device's local keys/bindings;
+# we never on-board another device over the air.
+CONFIG_BLE_MESH=y
+CONFIG_BLE_MESH_NODE=y
+CONFIG_BLE_MESH_PROVISIONER=y
+CONFIG_BLE_MESH_PB_ADV=y
+# CONFIG_BLE_MESH_PB_GATT is not set
+# CONFIG_BLE_MESH_GATT_PROXY_SERVER is not set
+CONFIG_BLE_MESH_RELAY=y
+CONFIG_BLE_MESH_USE_DUPLICATE_SCAN=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y
+
+# NimBLE GAP logs every advertise stop/start at INFO. The mesh stack
+# cycles these every ~100ms so they drown the application logs.
+# Drop NimBLE itself to WARNING; our `dp_mesh:` lines stay at INFO.
+# CONFIG_BT_NIMBLE_LOG_LEVEL_INFO is not set
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 
 # NVS for persistent state (mesh provisioning, calibration)
 CONFIG_NVS_ENCRYPTION=n
