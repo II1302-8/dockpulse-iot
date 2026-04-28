@@ -15,7 +15,7 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_DOCKPULSE_ROLE_SENSOR
+#if CONFIG_DOCKPULSE_ROLE_SENSOR && !CONFIG_DOCKPULSE_RADAR_FAKE
 
 #include <string.h>
 
@@ -36,6 +36,9 @@ static const char *TAG = "dp_radar";
 static const uint8_t REPORT_HDR[4] = {0xF4, 0xF3, 0xF2, 0xF1};
 static const uint8_t REPORT_TAIL[4] = {0xF8, 0xF7, 0xF6, 0xF5};
 
+static const uint8_t CMD_HDR[4] = {0xFD, 0xFC, 0xFB, 0xFA};
+static const uint8_t CMD_TAIL[4] = {0x04, 0x03, 0x02, 0x01};
+
 // Command: switch to Report mode.
 //   header(4) | len(2)=0x0008 | cmd(2)=0x0012 | param_id(2)=0x0000 |
 //   value(4)=0x00000004 | tail(4)
@@ -43,6 +46,79 @@ static const uint8_t CMD_ENTER_REPORT_MODE[] = {
     0xFD, 0xFC, 0xFB, 0xFA, 0x08, 0x00, 0x12, 0x00, 0x00,
     0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x03, 0x02, 0x01,
 };
+
+// Read one command-frame ACK and verify it matches `req_cmd`. Per the
+// HMMD protocol, responses use the same FD FC FB FA / 04 03 02 01
+// framing as requests, with body[0..1] = req_cmd | 0x0100 (response
+// bit). We don't validate the rest of the body — a matching cmd word
+// is enough to confirm the module saw and accepted the request.
+static esp_err_t read_command_ack(uint16_t req_cmd, TickType_t timeout)
+{
+    enum { SYNC_HDR, READ_LEN, READ_BODY } state = SYNC_HDR;
+    uint8_t hdr_match = 0;
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len = 0;
+    uint16_t expected_body = 0;
+    const uint16_t want_cmd = req_cmd | 0x0100;
+
+    const TickType_t deadline = xTaskGetTickCount() + timeout;
+
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(deadline - now) <= 0) {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        uint8_t b;
+        int n = uart_read_bytes(RADAR_PORT, &b, 1, deadline - now);
+        if (n <= 0) {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        switch (state) {
+        case SYNC_HDR:
+            if (b == CMD_HDR[hdr_match]) {
+                hdr_match++;
+                if (hdr_match == sizeof(CMD_HDR)) {
+                    memcpy(frame, CMD_HDR, sizeof(CMD_HDR));
+                    frame_len = sizeof(CMD_HDR);
+                    state = READ_LEN;
+                }
+            } else {
+                hdr_match = (b == CMD_HDR[0]) ? 1 : 0;
+            }
+            break;
+
+        case READ_LEN:
+            frame[frame_len++] = b;
+            if (frame_len == sizeof(CMD_HDR) + 2) {
+                expected_body = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
+                if (expected_body < 2 ||
+                    expected_body + sizeof(CMD_HDR) + 2 + sizeof(CMD_TAIL) > MAX_FRAME) {
+                    return ESP_FAIL;
+                }
+                state = READ_BODY;
+            }
+            break;
+
+        case READ_BODY:
+            frame[frame_len++] = b;
+            if (frame_len == sizeof(CMD_HDR) + 2 + expected_body + sizeof(CMD_TAIL)) {
+                const uint8_t *tail = &frame[frame_len - sizeof(CMD_TAIL)];
+                if (memcmp(tail, CMD_TAIL, sizeof(CMD_TAIL)) != 0) {
+                    return ESP_FAIL;
+                }
+                const uint8_t *body = &frame[sizeof(CMD_HDR) + 2];
+                uint16_t got_cmd = (uint16_t)body[0] | ((uint16_t)body[1] << 8);
+                if (got_cmd != want_cmd) {
+                    return ESP_FAIL;
+                }
+                return ESP_OK;
+            }
+            break;
+        }
+    }
+}
 
 esp_err_t dp_radar_init(void)
 {
@@ -69,7 +145,17 @@ esp_err_t dp_radar_init(void)
         return ESP_FAIL;
     }
     uart_wait_tx_done(RADAR_PORT, pdMS_TO_TICKS(100));
-    vTaskDelay(pdMS_TO_TICKS(50));
+
+    esp_err_t ack = read_command_ack(0x0012, pdMS_TO_TICKS(500));
+    if (ack != ESP_OK) {
+        // The module may already be in Report mode from a previous boot,
+        // in which case the missing ACK is harmless. Failures here are
+        // most often a wiring/baud problem, which dp_radar_read() will
+        // surface as repeated timeouts. Don't fail init on this alone.
+        ESP_LOGW(TAG, "mode-change ACK not seen (%s) — continuing", esp_err_to_name(ack));
+    } else {
+        ESP_LOGI(TAG, "mode-change ACK ok (Report mode)");
+    }
     uart_flush_input(RADAR_PORT);
     return ESP_OK;
 }
@@ -139,14 +225,23 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
                     frame_len = 0;
                     break;
                 }
-                // body[0]   = presence (00/01)
-                // body[1..2]= distance cm, LE
-                // body[3..] = energy gates (ignored here)
+                // body[0]      = presence (00/01)
+                // body[1..2]   = distance cm, LE
+                // body[3..34]  = 16 gate energies, LE uint16 each
                 const uint8_t *body = &frame[sizeof(REPORT_HDR) + 2];
                 out->presence = body[0] != 0;
                 out->distance_cm = (uint16_t)body[1] | ((uint16_t)body[2] << 8);
                 out->target_state = (int8_t)body[0];
                 out->ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                if (expected_body >= 3 + 2 * DP_RADAR_GATE_COUNT) {
+                    const uint8_t *e = &body[3];
+                    for (size_t i = 0; i < DP_RADAR_GATE_COUNT; i++) {
+                        out->gate_energy[i] = (uint16_t)e[2 * i] | ((uint16_t)e[2 * i + 1] << 8);
+                    }
+                } else {
+                    memset(out->gate_energy, 0, sizeof(out->gate_energy));
+                }
                 return ESP_OK;
             }
             break;
@@ -155,6 +250,51 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
 }
 
 esp_err_t dp_radar_deinit(void) { return uart_driver_delete(RADAR_PORT); }
+
+#elif CONFIG_DOCKPULSE_ROLE_SENSOR && CONFIG_DOCKPULSE_RADAR_FAKE
+
+// Fake radar for bench-testing the mesh + gateway path with no
+// hardware attached. Walks the distance through a 30-step cycle so
+// the gateway sees a recognisable pattern, with one synthetic peak in
+// the gate matching the current distance.
+
+#include <string.h>
+
+#include "esp_log.h"
+#include "esp_timer.h"
+
+static const char *TAG = "dp_radar_fake";
+static uint32_t s_counter;
+
+esp_err_t dp_radar_init(void)
+{
+    ESP_LOGW(TAG, "FAKE radar — synthetic samples, no UART");
+    s_counter = 0;
+    return ESP_OK;
+}
+
+esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
+{
+    (void)timeout;
+    if (!out)
+        return ESP_ERR_INVALID_ARG;
+
+    uint32_t step = s_counter++ % 30;
+    uint16_t distance_cm = (uint16_t)(200 + step * 20); // 200..780 cm
+    out->presence = distance_cm > 100;
+    out->distance_cm = distance_cm;
+    out->target_state = 1;
+    out->ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    memset(out->gate_energy, 0, sizeof(out->gate_energy));
+    size_t gate = (size_t)(distance_cm / DP_RADAR_GATE_CM);
+    if (gate < DP_RADAR_GATE_COUNT) {
+        out->gate_energy[gate] = 0x4000;
+    }
+    return ESP_OK;
+}
+
+esp_err_t dp_radar_deinit(void) { return ESP_OK; }
 
 #else // !CONFIG_DOCKPULSE_ROLE_SENSOR — stub out for gateway build
 
