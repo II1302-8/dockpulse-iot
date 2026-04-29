@@ -26,6 +26,24 @@ static void now_iso8601(char *out, size_t cap)
     strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 }
 
+// Map the BLE Mesh berth_status_t's uint16_t berth_id to the suffix
+// expected by the backend seed (t1..t4, l1..l4, r1..r4). Out-of-range
+// values fall through to "x<n>" so the message is still visible in
+// logs but will be rejected by the backend as an unknown berth.
+static const char *berth_suffix(uint16_t idx, char *buf, size_t cap)
+{
+    static const char *const SUFFIXES[12] = {
+        "t1", "t2", "t3", "t4",
+        "l1", "l2", "l3", "l4",
+        "r1", "r2", "r3", "r4",
+    };
+    if (idx >= 1 && idx <= 12) {
+        return SUFFIXES[idx - 1];
+    }
+    snprintf(buf, cap, "x%u", idx);
+    return buf;
+}
+
 esp_err_t dp_gateway_init(void)
 {
     ESP_LOGI(TAG, "init (uplink_stub=%d)",
@@ -72,10 +90,12 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     return ESP_OK;
 #else
     char node_id[16];
-    char berth_id[16];
+    char berth_id[64];
+    char suffix_buf[8];
     char ts_iso[32];
     snprintf(node_id, sizeof(node_id), "node-%03u", s->node_id);
-    snprintf(berth_id, sizeof(berth_id), "berth-%03u", s->berth_id);
+    const char *suffix = berth_suffix(s->berth_id, suffix_buf, sizeof(suffix_buf));
+    snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
     now_iso8601(ts_iso, sizeof(ts_iso));
 
     // Topic format per docs/api/mqtt-contract.yml in the dockpulse repo:
@@ -83,7 +103,7 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     // Backend's _parse_berth_topic (backend/app/mqtt.py) requires exactly
     // 5 path segments starting with "harbor/" or it silently drops the
     // message.
-    char topic[96];
+    char topic[192];
     snprintf(topic, sizeof(topic), "harbor/%s/%s/%s/status", CONFIG_DOCKPULSE_HARBOR_ID,
              CONFIG_DOCKPULSE_DOCK_ID, berth_id);
 
@@ -107,6 +127,8 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     esp_err_t err = dp_gateway_mqtt_publish(topic, payload, CONFIG_DOCKPULSE_MQTT_QOS);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "publish failed topic=%s err=%d", topic, err);
+    } else {
+        ESP_LOGI(TAG, "publish topic=%s payload=%s", topic, payload);
     }
     cJSON_free(payload);
     return err;

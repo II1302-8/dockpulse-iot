@@ -46,6 +46,6 @@ dp_gateway: uplink-stub src=0x0003 node=2 berth=2 occupied=1 raw_mm=2000 ts=...
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — what the firmware does, mesh topology, wire format, code layout
-- [docs/development.md](docs/development.md) — toolchain, build/flash/monitor helpers, two-board workflow, field-test capture
+- [docs/development.md](docs/development.md) — toolchain, build/flash/monitor helpers, two-board workflow, field-test capture, mTLS provisioning
 - [docs/troubleshooting.md](docs/troubleshooting.md) — known IDF v5.3.2 gotchas, mesh stack quirks, common errors
 - [CONTRIBUTING.md](CONTRIBUTING.md) — code style, PR process
