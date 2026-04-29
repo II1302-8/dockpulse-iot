@@ -38,10 +38,8 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
         break;
     case MQTT_EVENT_ERROR:
         if (event && event->error_handle) {
-            ESP_LOGE(TAG,
-                     "broker error: type=%d tls_err=0x%x tls_stack_err=0x%x sock_errno=%d",
-                     event->error_handle->error_type,
-                     event->error_handle->esp_tls_last_esp_err,
+            ESP_LOGE(TAG, "broker error: type=%d tls_err=0x%x tls_stack_err=0x%x sock_errno=%d",
+                     event->error_handle->error_type, event->error_handle->esp_tls_last_esp_err,
                      event->error_handle->esp_tls_stack_err,
                      event->error_handle->esp_transport_sock_errno);
         } else {

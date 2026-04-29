@@ -33,9 +33,7 @@ static void now_iso8601(char *out, size_t cap)
 static const char *berth_suffix(uint16_t idx, char *buf, size_t cap)
 {
     static const char *const SUFFIXES[12] = {
-        "t1", "t2", "t3", "t4",
-        "l1", "l2", "l3", "l4",
-        "r1", "r2", "r3", "r4",
+        "t1", "t2", "t3", "t4", "l1", "l2", "l3", "l4", "r1", "r2", "r3", "r4",
     };
     if (idx >= 1 && idx <= 12) {
         return SUFFIXES[idx - 1];
