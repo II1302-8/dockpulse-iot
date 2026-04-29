@@ -22,3 +22,7 @@ dependencies.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Per-device MQTT client certs embedded into the firmware at build time.
+# Issued by `gen_certs.sh device <id>` on the prod host (see dockpulse repo).
+certs/

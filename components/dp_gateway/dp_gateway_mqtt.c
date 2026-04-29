@@ -9,6 +9,12 @@
 #include "freertos/event_groups.h"
 #include "mqtt_client.h"
 
+#if CONFIG_DOCKPULSE_MQTT_TLS
+#include "esp_crt_bundle.h"
+extern const char client_crt_start[] asm("_binary_client_crt_start");
+extern const char client_key_start[] asm("_binary_client_key_start");
+#endif
+
 static const char *TAG = "dp_gw_mqtt";
 
 #define MQTT_CONNECTED_BIT BIT0
@@ -20,7 +26,7 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
 {
     (void)arg;
     (void)base;
-    (void)data;
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "broker connected");
@@ -31,7 +37,14 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
         xEventGroupClearBits(s_mqtt_events, MQTT_CONNECTED_BIT);
         break;
     case MQTT_EVENT_ERROR:
-        ESP_LOGE(TAG, "broker error");
+        if (event && event->error_handle) {
+            ESP_LOGE(TAG, "broker error: type=%d tls_err=0x%x tls_stack_err=0x%x sock_errno=%d",
+                     event->error_handle->error_type, event->error_handle->esp_tls_last_esp_err,
+                     event->error_handle->esp_tls_stack_err,
+                     event->error_handle->esp_transport_sock_errno);
+        } else {
+            ESP_LOGE(TAG, "broker error");
+        }
         break;
     default:
         break;
@@ -51,6 +64,12 @@ esp_err_t dp_gateway_mqtt_start_and_wait(void)
     if (CONFIG_DOCKPULSE_MQTT_CLIENT_ID[0] != '\0') {
         cfg.credentials.client_id = CONFIG_DOCKPULSE_MQTT_CLIENT_ID;
     }
+
+#if CONFIG_DOCKPULSE_MQTT_TLS
+    cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.credentials.authentication.certificate = client_crt_start;
+    cfg.credentials.authentication.key = client_key_start;
+#endif
 
     s_client = esp_mqtt_client_init(&cfg);
     if (!s_client) {

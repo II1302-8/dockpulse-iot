@@ -196,6 +196,7 @@ CONFIG_DOCKPULSE_GATEWAY_UPLINK_STUB=n
 CONFIG_DOCKPULSE_WIFI_SSID=...
 CONFIG_DOCKPULSE_WIFI_PASSWORD=...
 CONFIG_DOCKPULSE_MQTT_BROKER_URI=mqtt://192.168.x.y:1883
+CONFIG_DOCKPULSE_MQTT_TLS=n
 ```
 
 For an end-to-end JSON smoke test without any sensor:
@@ -206,6 +207,89 @@ CONFIG_DOCKPULSE_MQTT_SELFTEST=y
 
 The gateway will publish one synthetic `berth_status_t` after MQTT
 connect.
+
+## Provisioning a gateway against the prod broker
+
+Production targets `mqtts://mqtt.dockpulse.xyz:8883` and requires mTLS.
+The broker presents a Let's Encrypt server cert (verified by the
+ESP-IDF Mozilla CA bundle, no roots to ship) and demands a client cert
+issued by the DockPulse device CA in the dockpulse repo. Each gateway
+gets its own cert; the cert's CN becomes its MQTT username.
+
+### 1. Issue a per-device cert on the prod host
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+    exec cert-tools \
+    bash /scripts/gen_certs.sh device gateway-<harbor>-<n>
+```
+
+Pick a stable id (e.g. `gateway-saltsjobaden-1`). The script prints
+the cert + key paths inside the `mqtt-pki` volume.
+
+### 2. Extract the cert + key onto your dev machine
+
+```bash
+mkdir -p out
+docker run --rm \
+    -v dockpulse_mqtt-pki:/pki:ro \
+    -v "$(pwd)/out":/out alpine sh -c \
+    'cp /pki/devices/gateway-<harbor>-<n>/gateway-<harbor>-<n>.crt /out/client.crt &&
+     cp /pki/devices/gateway-<harbor>-<n>/gateway-<harbor>-<n>.key /out/client.key'
+```
+
+(Adjust the volume name if your Komodo project prefix differs;
+`docker volume ls | grep mqtt-pki` shows the real name.)
+
+### 3. Drop the files into the firmware tree
+
+```bash
+mkdir -p certs
+mv out/client.crt certs/client.crt
+mv out/client.key certs/client.key
+```
+
+`certs/` is gitignored; **do not commit**. The CMake build will
+embed both files into the gateway binary at link time.
+
+### 4. Build and flash with TLS on
+
+```bash
+tools/build.sh -r gateway -n 1   # menuconfig once to set Wi-Fi + client id
+tools/run.sh   -r gateway -p /dev/cu.usbmodem21 --erase
+```
+
+Set in menuconfig (or directly in `sdkconfig`):
+
+```
+CONFIG_DOCKPULSE_GATEWAY_UPLINK_STUB=n
+CONFIG_DOCKPULSE_MQTT_TLS=y
+CONFIG_DOCKPULSE_MQTT_BROKER_URI=mqtts://mqtt.dockpulse.xyz:8883
+CONFIG_DOCKPULSE_MQTT_CLIENT_ID=gateway-<harbor>-<n>
+CONFIG_DOCKPULSE_WIFI_SSID=...
+CONFIG_DOCKPULSE_WIFI_PASSWORD=...
+```
+
+`CONFIG_DOCKPULSE_MQTT_CLIENT_ID` should match the cert CN — that's
+what mosquitto sees as the username via `use_identity_as_username`.
+
+### 5. Verify
+
+On the prod host:
+
+```bash
+docker logs dockpulse-prod-mosquitto --tail 20
+```
+
+Expect a line like `New client connected … u'gateway-saltsjobaden-1'`
+shortly after the gateway boots and joins Wi-Fi. Subsequent publishes
+appear in the backend.
+
+### Cert rotation
+
+Device certs are 90-day. Re-run step 1 (`gen_certs.sh device <id>`
+always re-issues), step 2, step 3, then re-flash. Old cert continues
+to work until it expires, so rotation is non-urgent.
 
 ## Field-test data capture
 

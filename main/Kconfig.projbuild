@@ -108,11 +108,31 @@ menu "DockPulse"
         config DOCKPULSE_MQTT_BROKER_URI
             string "MQTT broker URI"
             depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
-            default "mqtt://mosquitto.local:1883"
+            default "mqtts://mqtt.dockpulse.xyz:8883"
             help
-                Broker URI. Use mqtt:// for plaintext (dev/staging — see
-                ADR 001) or mqtts:// for TLS / mTLS (prod). mTLS client
-                certificate provisioning lands in a separate issue.
+                Broker URI. Use mqtts:// for TLS / mTLS (prod), or
+                mqtt:// for plaintext local development. When TLS is
+                enabled below, the scheme must be mqtts:// and the
+                broker must present a publicly trusted server cert
+                (Let's Encrypt in our prod stack).
+
+        config DOCKPULSE_MQTT_TLS
+            bool "Use TLS + client cert (mTLS)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default y
+            select MBEDTLS_CERTIFICATE_BUNDLE
+            help
+                Enables mqtts:// transport, server verification via the
+                ESP-IDF Mozilla CA bundle, and client authentication
+                using a per-device cert + key embedded into the
+                firmware at build time. Place the files at
+                  certs/client.crt
+                  certs/client.key
+                The cert's CN becomes the gateway's MQTT username; it
+                must be issued by the device CA in the dockpulse repo's
+                cert-tools (`gen_certs.sh device <id>`). When this is
+                off the gateway connects in plaintext on mqtt://, only
+                useful with a local broker on a trusted network.
 
         config DOCKPULSE_HARBOR_ID
             string "Harbor identifier (topic segment)"
@@ -129,6 +149,19 @@ menu "DockPulse"
             default "dock-a"
             help
                 Used as the {dock_id} segment of the MQTT topic.
+
+        config DOCKPULSE_BERTH_ID_FORMAT
+            string "Berth ID format (printf %s = suffix)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default "ksss-saltsjobaden-pier-1-%s"
+            help
+                Format string used to build a contract-shape berth_id
+                from the integer carried in the BLE Mesh berth_status_t.
+                The single %s is replaced with a suffix from the
+                seed-defined order: nodes 1..4 -> t1..t4, 5..8 ->
+                l1..l4, 9..12 -> r1..r4. The result must match a
+                berth_id row in the backend's berths table or the
+                backend will drop the publish as "Unknown berth".
 
         config DOCKPULSE_MQTT_QOS
             int "MQTT publish QoS"

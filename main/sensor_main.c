@@ -84,8 +84,8 @@ void dp_sensor_run(void)
 
         TickType_t now = xTaskGetTickCount();
         if (last_publish == 0 || (now - last_publish) >= publish_interval) {
-            ESP_LOGI(TAG, "presence=%d distance_cm=%u near=%d",
-                     s.presence, s.distance_cm, (int)near);
+            ESP_LOGI(TAG, "presence=%d distance_cm=%u near=%d", s.presence, s.distance_cm,
+                     (int)near);
             // Field-test trace: one CSV-style line per published sample
             // so logs can be grepped (`grep ',RADAR,' …`) and fed to a
             // plotter to set per-berth gate thresholds.

@@ -9,6 +9,8 @@
 
 #include "sdkconfig.h"
 
+#if CONFIG_DOCKPULSE_ROLE_SENSOR
+
 #define PROX_CM     CONFIG_DOCKPULSE_PROXIMITY_CM
 #define PROX_FRAMES CONFIG_DOCKPULSE_PROXIMITY_STABILITY_FRAMES
 
@@ -25,3 +27,13 @@ bool dp_radar_filter_near(const dp_radar_sample_t *s)
     }
     return s_prox_streak >= PROX_FRAMES;
 }
+
+#else
+
+bool dp_radar_filter_near(const dp_radar_sample_t *s)
+{
+    (void)s;
+    return false;
+}
+
+#endif
