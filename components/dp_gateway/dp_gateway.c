@@ -5,6 +5,7 @@
 #if CONFIG_DOCKPULSE_ROLE_GATEWAY
 
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "cJSON.h"
@@ -17,7 +18,7 @@ static const char *TAG = "dp_gateway";
 // Format the gateway's current wallclock as ISO 8601 UTC. If the system
 // clock has not been set yet (no SNTP), this returns a 1970-epoch
 // stamp — that's intentional: the backend is the source of truth on
-// timestamps and can detect the unset-clock case.
+// timestamps and can detect the unset-clock case
 static void now_iso8601(char *out, size_t cap)
 {
     time_t now = time(NULL);
@@ -29,7 +30,7 @@ static void now_iso8601(char *out, size_t cap)
 // Map the BLE Mesh berth_status_t's uint16_t berth_id to the suffix
 // expected by the backend seed (t1..t4, l1..l4, r1..r4). Out-of-range
 // values fall through to "x<n>" so the message is still visible in
-// logs but will be rejected by the backend as an unknown berth.
+// logs but will be rejected by the backend as an unknown berth
 static const char *berth_suffix(uint16_t idx, char *buf, size_t cap)
 {
     static const char *const SUFFIXES[12] = {
@@ -100,7 +101,7 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     //   harbor/{harbor_id}/{dock_id}/{berth_id}/status
     // Backend's _parse_berth_topic (backend/app/mqtt.py) requires exactly
     // 5 path segments starting with "harbor/" or it silently drops the
-    // message.
+    // message
     char topic[192];
     snprintf(topic, sizeof(topic), "harbor/%s/%s/%s/status", CONFIG_DOCKPULSE_HARBOR_ID,
              CONFIG_DOCKPULSE_DOCK_ID, berth_id);
@@ -133,12 +134,75 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
 #endif
 }
 
+esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
+{
+    if (!d)
+        return ESP_ERR_INVALID_ARG;
+#if CONFIG_DOCKPULSE_GATEWAY_UPLINK_STUB
+    ESP_LOGI(TAG, "uplink-stub diag src=0x%04x node=%u berth=%u target_state=%d raw_cm=%u",
+             src_addr, d->node_id, d->berth_id, d->target_state, d->raw_distance_cm);
+    return ESP_OK;
+#else
+    char node_id[16];
+    char berth_id[64];
+    char suffix_buf[8];
+    char ts_iso[32];
+    snprintf(node_id, sizeof(node_id), "node-%03u", d->node_id);
+    const char *suffix = berth_suffix(d->berth_id, suffix_buf, sizeof(suffix_buf));
+    snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
+    now_iso8601(ts_iso, sizeof(ts_iso));
+
+    char topic[192];
+    snprintf(topic, sizeof(topic), "harbor/%s/%s/%s/diag", CONFIG_DOCKPULSE_HARBOR_ID,
+             CONFIG_DOCKPULSE_DOCK_ID, berth_id);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root)
+        return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(root, "node_id", node_id);
+    cJSON_AddStringToObject(root, "berth_id", berth_id);
+    cJSON_AddNumberToObject(root, "target_state", d->target_state);
+    cJSON_AddNumberToObject(root, "raw_distance_cm", d->raw_distance_cm);
+
+    cJSON *gates = cJSON_CreateArray();
+    if (!gates) {
+        cJSON_Delete(root);
+        return ESP_ERR_NO_MEM;
+    }
+    for (size_t i = 0; i < DP_RADAR_GATE_COUNT; i++) {
+        cJSON_AddItemToArray(gates, cJSON_CreateNumber(d->gate_energy[i]));
+    }
+    cJSON_AddItemToObject(root, "gate_energy", gates);
+    cJSON_AddStringToObject(root, "timestamp", ts_iso);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload)
+        return ESP_ERR_NO_MEM;
+
+    esp_err_t err = dp_gateway_mqtt_publish(topic, payload, CONFIG_DOCKPULSE_MQTT_QOS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "publish diag failed topic=%s err=%d", topic, err);
+    } else {
+        ESP_LOGI(TAG, "publish diag topic=%s len=%u", topic, (unsigned)strlen(payload));
+    }
+    cJSON_free(payload);
+    return err;
+#endif
+}
+
 #else // !CONFIG_DOCKPULSE_ROLE_GATEWAY — stub out for sensor build
 
 esp_err_t dp_gateway_init(void) { return ESP_OK; }
 esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
 {
     (void)s;
+    (void)src_addr;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
+{
+    (void)d;
     (void)src_addr;
     return ESP_ERR_NOT_SUPPORTED;
 }
