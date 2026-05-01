@@ -219,8 +219,10 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
             frame[frame_len++] = b;
             if (frame_len == sizeof(REPORT_HDR) + 2) {
                 expected_body = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
-                if (expected_body + sizeof(REPORT_HDR) + 2 + sizeof(REPORT_TAIL) > MAX_FRAME) {
-                    ESP_LOGW(TAG, "oversize frame body=%u, resync", expected_body);
+                // need state(1)+dist(2); shorter aliases tail
+                if (expected_body < 3 ||
+                    expected_body + sizeof(REPORT_HDR) + 2 + sizeof(REPORT_TAIL) > MAX_FRAME) {
+                    ESP_LOGW(TAG, "bad frame body=%u, resync", expected_body);
                     state = SYNC_HDR;
                     hdr_match = 0;
                     frame_len = 0;
@@ -241,13 +243,13 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
                     frame_len = 0;
                     break;
                 }
-                // body[0]      = presence (00/01)
-                // body[1..2]   = distance cm, LE
-                // body[3..34]  = 16 gate energies, LE uint16 each
+                // body[0]     state: 0 none, 1 moving, 2 static, 3 both
+                // body[1..2]  distance cm LE
+                // body[3..34] 16 gate energies LE u16
                 const uint8_t *body = &frame[sizeof(REPORT_HDR) + 2];
-                out->presence = body[0] != 0;
-                out->distance_cm = (uint16_t)body[1] | ((uint16_t)body[2] << 8);
                 out->target_state = (int8_t)body[0];
+                out->presence = out->target_state != 0;
+                out->distance_cm = (uint16_t)body[1] | ((uint16_t)body[2] << 8);
                 out->ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
                 if (expected_body >= 3 + 2 * DP_RADAR_GATE_COUNT) {

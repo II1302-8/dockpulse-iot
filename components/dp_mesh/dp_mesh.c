@@ -74,6 +74,9 @@ static const char *TAG = "dp_mesh";
 // CONFIG_BLE_MESH_MAX_PROV_NODES (default 10)
 #define DP_MAX_SENSORS 8
 
+_Static_assert(CONFIG_DOCKPULSE_NODE_ID >= 1 && CONFIG_DOCKPULSE_NODE_ID <= DP_MAX_SENSORS,
+               "DOCKPULSE_NODE_ID out of DP_MAX_SENSORS range — gateway will drop frames");
+
 static const uint8_t DP_NET_KEY[16] = {
     'd', 'o', 'c', 'k', 'p', 'u', 'l', 's', 'e', '-', 'n', 'e', 't', 'k', 'e', 'y',
 };
