@@ -20,11 +20,17 @@ typedef void (*dp_mesh_status_handler_t)(const berth_status_t *s, uint16_t src_a
 // gateway rx callback for berth_diag_t
 typedef void (*dp_mesh_diag_handler_t)(const berth_diag_t *d, uint16_t src_addr);
 
-esp_err_t dp_mesh_init(dp_mesh_role_t role);
+// Handlers are passed in at init time so they're stored before any
+// rx path can fire. Sensor role ignores both fields.
+typedef struct {
+    dp_mesh_role_t role;
+    dp_mesh_status_handler_t status_cb;
+    dp_mesh_diag_handler_t diag_cb;
+} dp_mesh_cfg_t;
+
+esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg);
 esp_err_t dp_mesh_publish_status(const berth_status_t *s);
 esp_err_t dp_mesh_publish_diag(const berth_diag_t *d);
-esp_err_t dp_mesh_set_status_handler(dp_mesh_status_handler_t cb);
-esp_err_t dp_mesh_set_diag_handler(dp_mesh_diag_handler_t cb);
 
 #ifdef __cplusplus
 }

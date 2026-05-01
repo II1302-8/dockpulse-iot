@@ -4,6 +4,8 @@
 
 #include "dp_gateway_priv.h"
 
+#include <inttypes.h>
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -92,6 +94,15 @@ esp_err_t dp_gateway_mqtt_publish(const char *topic, const char *payload, int qo
 {
     if (!s_client || !topic || !payload) {
         return ESP_ERR_INVALID_ARG;
+    }
+    EventBits_t bits = xEventGroupGetBits(s_mqtt_events);
+    if (!(bits & MQTT_CONNECTED_BIT)) {
+        // log every 16th drop so a lost broker doesn't spam
+        static uint32_t s_dropped;
+        if ((s_dropped++ & 0x0F) == 0) {
+            ESP_LOGW(TAG, "drop publish, broker disconnected (total=%" PRIu32 ")", s_dropped);
+        }
+        return ESP_ERR_INVALID_STATE;
     }
     int msg_id = esp_mqtt_client_publish(s_client, topic, payload, 0, qos, 0);
     if (msg_id < 0) {

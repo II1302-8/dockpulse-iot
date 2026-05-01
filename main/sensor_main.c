@@ -47,7 +47,7 @@ static berth_diag_t to_diag(const dp_radar_sample_t *s, uint8_t node_id)
 void dp_sensor_run(void)
 {
     ESP_ERROR_CHECK(dp_radar_init());
-    ESP_ERROR_CHECK(dp_mesh_init(DP_MESH_ROLE_SENSOR));
+    ESP_ERROR_CHECK(dp_mesh_init(&(const dp_mesh_cfg_t){.role = DP_MESH_ROLE_SENSOR}));
 
     uint8_t node_id = 0;
     dp_common_get_node_id(&node_id);
