@@ -3,7 +3,7 @@
 // The module's distance estimator is reliable when a target is close
 // (high SNR), so we use it directly: if the reported distance falls
 // inside the threshold for N consecutive frames, the berth is
-// occupied.
+// occupied
 
 #include "dp_radar_filter.h"
 

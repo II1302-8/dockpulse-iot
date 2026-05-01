@@ -14,7 +14,7 @@ esp_err_t dp_radar_deinit(void);
 
 // Re-send the Report-mode command. Call this from a recovery path
 // (e.g., after N consecutive read timeouts) to nudge a module that
-// has dropped out of streaming.
+// has dropped out of streaming
 esp_err_t dp_radar_enter_report_mode(void);
 
 #ifdef __cplusplus
