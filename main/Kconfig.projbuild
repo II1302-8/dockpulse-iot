@@ -60,6 +60,15 @@ menu "DockPulse"
             help
                 Wake interval between mmWave samples on sensor nodes.
 
+        config DOCKPULSE_DIAG_ENABLE
+            bool "Publish raw radar diagnostics over mesh"
+            default y
+            help
+                Send a berth_diag_t (target state, raw distance, 16
+                gate energies) alongside each status; gateway forwards
+                it on harbor/.../diag. Disable to save mesh airtime
+                / solar power.
+
         menu "Proximity"
 
             config DOCKPULSE_PROXIMITY_CM

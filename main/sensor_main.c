@@ -16,16 +16,33 @@ static berth_status_t to_status(const dp_radar_sample_t *s, bool occupied, uint8
     return (berth_status_t){
         .node_id = node_id,
         // 1:1 sensor-to-berth mapping for now. When that changes,
-        // route node_id → berth_id through a config lookup here.
+        // route node_id → berth_id through a config lookup here
         .berth_id = node_id,
         .occupied = occupied,
         .sensor_raw_mm = (uint16_t)(s->distance_cm * 10u),
         // Battery monitoring not yet wired (no ADC divider on the
-        // current hardware revision).
+        // current hardware revision)
         .battery_pct = DP_BATTERY_UNKNOWN,
         .ts_ms = s->ts_ms,
     };
 }
+
+#if CONFIG_DOCKPULSE_DIAG_ENABLE
+static berth_diag_t to_diag(const dp_radar_sample_t *s, uint8_t node_id)
+{
+    berth_diag_t d = {
+        .node_id = node_id,
+        .berth_id = node_id,
+        .target_state = s->target_state,
+        .raw_distance_cm = s->distance_cm,
+        .ts_ms = s->ts_ms,
+    };
+    for (size_t i = 0; i < DP_RADAR_GATE_COUNT; i++) {
+        d.gate_energy[i] = s->gate_energy[i];
+    }
+    return d;
+}
+#endif
 
 void dp_sensor_run(void)
 {
@@ -44,7 +61,7 @@ void dp_sensor_run(void)
     // TODO: replace this poll-and-throttle pattern with deep-sleep +
     // OT2 GPIO wakeup once we tackle the solar power budget. Currently
     // CPU runs continuously which is fine for mains-powered bench
-    // testing.
+    // testing
     const TickType_t read_interval = pdMS_TO_TICKS(200);
     const TickType_t publish_interval = pdMS_TO_TICKS(CONFIG_DOCKPULSE_SENSOR_PERIOD_MS);
     TickType_t last_publish = 0;
@@ -53,7 +70,7 @@ void dp_sensor_run(void)
     // surfaces). After this many back-to-back read timeouts, we nudge
     // it back by re-sending the mode-change command. ~10 misses ≈ 2 s
     // at the 200 ms read cadence — long enough to skip the radar's
-    // own brief calibration pauses without false-positive recovery.
+    // own brief calibration pauses without false-positive recovery
     const int RECOVERY_THRESHOLD = 10;
     int consecutive_failures = 0;
 
@@ -61,7 +78,7 @@ void dp_sensor_run(void)
         // 500ms is plenty: HMMD streams at ~10Hz, so a fresh frame
         // should arrive within 100ms. The radar occasionally pauses
         // for one or two frames (calibration), which is normal — log
-        // at DEBUG so the warning isn't noisy in steady state.
+        // at DEBUG so the warning isn't noisy in steady state
         dp_radar_sample_t s;
         esp_err_t err = dp_radar_read(&s, pdMS_TO_TICKS(500));
         if (err != ESP_OK) {
@@ -79,7 +96,7 @@ void dp_sensor_run(void)
 
         // Evaluate every read so the proximity stability window sees
         // a continuous frame stream, not the sparse one
-        // CONFIG_DOCKPULSE_SENSOR_PERIOD_MS would give.
+        // CONFIG_DOCKPULSE_SENSOR_PERIOD_MS would give
         bool near = dp_radar_filter_near(&s);
 
         TickType_t now = xTaskGetTickCount();
@@ -88,7 +105,7 @@ void dp_sensor_run(void)
                      (int)near);
             // Field-test trace: one CSV-style line per published sample
             // so logs can be grepped (`grep ',RADAR,' …`) and fed to a
-            // plotter to set per-berth gate thresholds.
+            // plotter to set per-berth gate thresholds
             ESP_LOGI(TAG,
                      "RADAR,%u,%d,%u,"
                      "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
@@ -100,6 +117,10 @@ void dp_sensor_run(void)
 
             berth_status_t status = to_status(&s, near, node_id);
             dp_mesh_publish_status(&status);
+#if CONFIG_DOCKPULSE_DIAG_ENABLE
+            berth_diag_t diag = to_diag(&s, node_id);
+            dp_mesh_publish_diag(&diag);
+#endif
             last_publish = now;
         }
 
