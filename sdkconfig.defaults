@@ -18,6 +18,10 @@ CONFIG_BLE_MESH=y
 CONFIG_BLE_MESH_NODE=y
 CONFIG_BLE_MESH_PROVISIONER=y
 CONFIG_BLE_MESH_PB_ADV=y
+# cfg client used by gateway to push AppKey + Model App Bind + Model Pub Set
+# to a freshly provisioned sensor. Linked on sensor too (unused there) so a
+# single image config covers both roles.
+CONFIG_BLE_MESH_CFG_CLI=y
 # CONFIG_BLE_MESH_PB_GATT is not set
 # CONFIG_BLE_MESH_GATT_PROXY_SERVER is not set
 CONFIG_BLE_MESH_RELAY=y
