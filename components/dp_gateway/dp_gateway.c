@@ -27,11 +27,10 @@ static void now_iso8601(char *out, size_t cap)
     strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 }
 
-// Map the BLE Mesh berth_status_t's uint16_t berth_id to the suffix
-// expected by the backend seed (t1..t4, l1..l4, r1..r4). Out-of-range
-// values fall through to "x<n>" so the message is still visible in
-// logs but will be rejected by the backend as an unknown berth
-static const char *berth_suffix(uint16_t idx, char *buf, size_t cap)
+// berth_id -> backend suffix (t1..t4, l1..l4, r1..r4). NULL if
+// out-of-range; caller should drop the publish, backend would reject
+// it as an unknown berth anyway
+static const char *berth_suffix(uint16_t idx)
 {
     static const char *const SUFFIXES[12] = {
         "t1", "t2", "t3", "t4", "l1", "l2", "l3", "l4", "r1", "r2", "r3", "r4",
@@ -39,8 +38,7 @@ static const char *berth_suffix(uint16_t idx, char *buf, size_t cap)
     if (idx >= 1 && idx <= 12) {
         return SUFFIXES[idx - 1];
     }
-    snprintf(buf, cap, "x%u", idx);
-    return buf;
+    return NULL;
 }
 
 esp_err_t dp_gateway_init(void)
@@ -88,12 +86,15 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
              s->node_id, s->berth_id, s->occupied, s->sensor_raw_mm, (unsigned long)s->ts_ms);
     return ESP_OK;
 #else
+    const char *suffix = berth_suffix(s->berth_id);
+    if (!suffix) {
+        ESP_LOGW(TAG, "drop status, unknown berth_id=%u src=0x%04x", s->berth_id, src_addr);
+        return ESP_ERR_INVALID_ARG;
+    }
     char node_id[16];
     char berth_id[64];
-    char suffix_buf[8];
     char ts_iso[32];
     snprintf(node_id, sizeof(node_id), "node-%03u", s->node_id);
-    const char *suffix = berth_suffix(s->berth_id, suffix_buf, sizeof(suffix_buf));
     snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
     now_iso8601(ts_iso, sizeof(ts_iso));
 
@@ -143,12 +144,15 @@ esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
              src_addr, d->node_id, d->berth_id, d->target_state, d->raw_distance_cm);
     return ESP_OK;
 #else
+    const char *suffix = berth_suffix(d->berth_id);
+    if (!suffix) {
+        ESP_LOGW(TAG, "drop diag, unknown berth_id=%u src=0x%04x", d->berth_id, src_addr);
+        return ESP_ERR_INVALID_ARG;
+    }
     char node_id[16];
     char berth_id[64];
-    char suffix_buf[8];
     char ts_iso[32];
     snprintf(node_id, sizeof(node_id), "node-%03u", d->node_id);
-    const char *suffix = berth_suffix(d->berth_id, suffix_buf, sizeof(suffix_buf));
     snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
     now_iso8601(ts_iso, sizeof(ts_iso));
 

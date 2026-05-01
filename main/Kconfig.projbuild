@@ -16,8 +16,12 @@ menu "DockPulse"
 
     config DOCKPULSE_NODE_ID
         int "Node ID (unique within installation)"
-        range 1 255
+        range 1 8
         default 1
+        help
+            Sensor unicast addr = 0x0001 + NODE_ID. Gateway pre-registers
+            DP_MAX_SENSORS (8) sensor slots; raise both together if you
+            need more nodes.
 
     menu "Sensor"
         depends on DOCKPULSE_ROLE_SENSOR

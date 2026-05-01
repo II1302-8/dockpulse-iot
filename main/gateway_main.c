@@ -26,9 +26,11 @@ static void on_diag(const berth_diag_t *d, uint16_t src_addr)
 void dp_gateway_run(void)
 {
     ESP_ERROR_CHECK(dp_gateway_init());
-    ESP_ERROR_CHECK(dp_mesh_init(DP_MESH_ROLE_GATEWAY));
-    ESP_ERROR_CHECK(dp_mesh_set_status_handler(on_status));
-    ESP_ERROR_CHECK(dp_mesh_set_diag_handler(on_diag));
+    ESP_ERROR_CHECK(dp_mesh_init(&(const dp_mesh_cfg_t){
+        .role = DP_MESH_ROLE_GATEWAY,
+        .status_cb = on_status,
+        .diag_cb = on_diag,
+    }));
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(10000));

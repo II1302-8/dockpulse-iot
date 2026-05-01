@@ -74,6 +74,9 @@ static const char *TAG = "dp_mesh";
 // CONFIG_BLE_MESH_MAX_PROV_NODES (default 10)
 #define DP_MAX_SENSORS 8
 
+_Static_assert(CONFIG_DOCKPULSE_NODE_ID >= 1 && CONFIG_DOCKPULSE_NODE_ID <= DP_MAX_SENSORS,
+               "DOCKPULSE_NODE_ID out of DP_MAX_SENSORS range — gateway will drop frames");
+
 static const uint8_t DP_NET_KEY[16] = {
     'd', 'o', 'c', 'k', 'p', 'u', 'l', 's', 'e', '-', 'n', 'e', 't', 'k', 'e', 'y',
 };
@@ -305,10 +308,16 @@ static void make_dev_uuid(void)
     s_dev_uuid[7] = node_id;
 }
 
-esp_err_t dp_mesh_init(dp_mesh_role_t role)
+esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
 {
-    s_role = role;
+    if (!cfg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_role = cfg->role;
+    s_handler = cfg->status_cb;
+    s_diag_handler = cfg->diag_cb;
     make_dev_uuid();
+    const dp_mesh_role_t role = cfg->role;
 
     uint8_t node_id = 0;
     dp_common_get_node_id(&node_id);
@@ -457,15 +466,6 @@ esp_err_t dp_mesh_publish_status(const berth_status_t *s)
     return ESP_OK;
 }
 
-esp_err_t dp_mesh_set_status_handler(dp_mesh_status_handler_t cb)
-{
-    if (s_role != DP_MESH_ROLE_GATEWAY) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    s_handler = cb;
-    return ESP_OK;
-}
-
 esp_err_t dp_mesh_publish_diag(const berth_diag_t *d)
 {
     if (!d) {
@@ -492,14 +492,5 @@ esp_err_t dp_mesh_publish_diag(const berth_diag_t *d)
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, "published diag berth_id=%u raw_cm=%u", d->berth_id, d->raw_distance_cm);
-    return ESP_OK;
-}
-
-esp_err_t dp_mesh_set_diag_handler(dp_mesh_diag_handler_t cb)
-{
-    if (s_role != DP_MESH_ROLE_GATEWAY) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    s_diag_handler = cb;
     return ESP_OK;
 }

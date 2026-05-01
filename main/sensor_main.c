@@ -47,7 +47,7 @@ static berth_diag_t to_diag(const dp_radar_sample_t *s, uint8_t node_id)
 void dp_sensor_run(void)
 {
     ESP_ERROR_CHECK(dp_radar_init());
-    ESP_ERROR_CHECK(dp_mesh_init(DP_MESH_ROLE_SENSOR));
+    ESP_ERROR_CHECK(dp_mesh_init(&(const dp_mesh_cfg_t){.role = DP_MESH_ROLE_SENSOR}));
 
     uint8_t node_id = 0;
     dp_common_get_node_id(&node_id);
@@ -68,9 +68,10 @@ void dp_sensor_run(void)
 
     // The HMMD occasionally drops out of Report mode (silent, no error
     // surfaces). After this many back-to-back read timeouts, we nudge
-    // it back by re-sending the mode-change command. ~10 misses ≈ 2 s
-    // at the 200 ms read cadence — long enough to skip the radar's
-    // own brief calibration pauses without false-positive recovery
+    // it back by re-sending the mode-change command. Worst case per
+    // miss is ~700 ms (500 ms read timeout + 200 ms gap), so 10 misses
+    // ≈ 7 s — long enough to skip the radar's own brief calibration
+    // pauses without false-positive recovery
     const int RECOVERY_THRESHOLD = 10;
     int consecutive_failures = 0;
 

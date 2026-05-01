@@ -10,7 +10,6 @@ extern "C" {
 
 esp_err_t dp_radar_init(void);
 esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout);
-esp_err_t dp_radar_deinit(void);
 
 // Re-send the Report-mode command. Call this from a recovery path
 // (e.g., after N consecutive read timeouts) to nudge a module that
