@@ -51,9 +51,12 @@ port that ships in the same IDF tree. Reasons are documented in
 
 - Company ID: `0x02E5` (Espressif — fine for prototypes)
 - Model ID: `0x0001`
-- Single opcode `STATUS_PUB`: `ESP_BLE_MESH_MODEL_OP_3(0x01, 0x02E5)`
-  → on the wire `0x01 0xE5 0x02`.
-- Payload: 11-byte packed `berth_status_t` (see below).
+- Two opcodes:
+  - `STATUS_PUB`: `ESP_BLE_MESH_MODEL_OP_3(0x01, 0x02E5)` — 11-byte
+    packed `berth_status_t` (single mesh segment).
+  - `DIAG_PUB`: `ESP_BLE_MESH_MODEL_OP_3(0x02, 0x02E5)` — 42-byte
+    packed `berth_diag_t` (segmented). Opt-in, gated by
+    `CONFIG_DOCKPULSE_DIAG_ENABLE`.
 
 ### Self-provisioning
 
@@ -119,6 +122,40 @@ offset  size  field
 `berth_status_pack()` and `berth_status_unpack()` in `dp_common.c` are
 the bounds-checked codec.
 
+### Diagnostic struct (`berth_diag_t`)
+
+Carries raw radar internals for dashboard-side debugging. Defined in
+the same header.
+
+```c
+typedef struct {
+    uint8_t  node_id;
+    uint16_t berth_id;
+    int8_t   target_state;     // raw radar state byte
+    uint16_t raw_distance_cm;  // pre-filter distance reported by radar
+    uint16_t gate_energy[16];  // per-gate magnitude, ~70 cm per gate
+    uint32_t ts_ms;
+} berth_diag_t;
+```
+
+Wire layout — 42 bytes, little-endian:
+
+```
+offset  size  field
+------  ----  ---------------------------------------
+  0      1   node_id
+  1      2   berth_id (LE)
+  3      1   target_state
+  4      2   raw_distance_cm (LE)
+  6     32   gate_energy[0..15] (16 × LE u16)
+ 38      4   ts_ms (LE)
+```
+
+Codec: `berth_diag_pack()` / `berth_diag_unpack()` in `dp_common.c`.
+Larger than the 12-byte unsegmented SDU, so the message uses BLE Mesh's
+segmented transport (~6 segments). Sent on the `DIAG_PUB` opcode and
+forwarded by the gateway on the `harbor/.../diag` MQTT topic.
+
 ### MQTT JSON
 
 The gateway converts `berth_status_t` to the JSON schema documented in
@@ -147,6 +184,33 @@ Example payload:
 `battery_pct` is omitted when the sensor reports `DP_BATTERY_UNKNOWN`
 (no battery monitoring on the current HW rev). `timestamp` is ISO 8601
 UTC from the gateway's clock — pre-SNTP it'll emit a 1970-epoch stamp.
+
+#### Diag topic
+
+When `CONFIG_DOCKPULSE_DIAG_ENABLE=y` (default) the gateway also
+publishes a JSON diagnostics message on
+`harbor/{harbor_id}/{dock_id}/{berth_id}/diag` once per status period.
+Same topic shape as `status` so the backend's `_parse_berth_topic`
+accepts it; backend storage of the new `kind="diag"` is tracked
+separately.
+
+```json
+{
+  "node_id": "node-002",
+  "berth_id": "berth-002",
+  "target_state": 1,
+  "raw_distance_cm": 230,
+  "gate_energy": [0, 0, 0, 16384, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "timestamp": "2026-04-28T14:30:00Z"
+}
+```
+
+`gate_energy` is a fixed 16-element array of unsigned LE u16 magnitudes
+straight from the HMMD's Report frame; units are firmware-internal —
+treat as relative magnitudes for thresholding. `target_state` is the
+HMMD presence/state byte (currently mirrors `presence`). Diag is
+intended for debugging misbehaving nodes from the dashboard, not for
+routine operation.
 
 ## Code layout
 

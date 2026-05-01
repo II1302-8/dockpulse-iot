@@ -9,6 +9,7 @@ extern "C" {
 
 esp_err_t dp_gateway_init(void);
 esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr);
+esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr);
 
 #ifdef __cplusplus
 }

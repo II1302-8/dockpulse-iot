@@ -18,7 +18,7 @@
 // handshake — every node is hard-coded with the same keys and a
 // deterministic unicast address derived from CONFIG_DOCKPULSE_NODE_ID.
 // Fine for the prototype; not suitable for production (no auth, shared
-// static keys).
+// static keys)
 
 #include "dp_mesh.h"
 
@@ -50,7 +50,7 @@ void ble_store_config_init(void);
 // drops mesh packets whose `src` isn't in that DB when running as a
 // provisioner — see comment in dp_mesh_init() near register_phantom_peer.
 // `bt_mesh_addr_t` is pulled in transitively via esp_ble_mesh_defs.h →
-// proxy_server.h → mesh/adapter.h, so we only need the function decl.
+// proxy_server.h → mesh/adapter.h, so we only need the function decl
 extern int bt_mesh_provisioner_provision(const bt_mesh_addr_t *addr, const uint8_t uuid[16],
                                          uint16_t oob_info, uint16_t unicast_addr,
                                          uint8_t element_num, uint16_t net_idx, uint8_t flags,
@@ -62,13 +62,16 @@ static const char *TAG = "dp_mesh";
 #define DP_CID           0x02E5
 #define DP_VND_MODEL_ID  0x0001
 #define DP_OP_STATUS_PUB ESP_BLE_MESH_MODEL_OP_3(0x01, DP_CID)
+#define DP_OP_DIAG_PUB   ESP_BLE_MESH_MODEL_OP_3(0x02, DP_CID)
+// larger message (diag) + 3-byte vendor opcode
+#define DP_PUB_BUF_LEN (BERTH_DIAG_WIRE_LEN + 3)
 
 #define DP_NET_IDX      0x0000
 #define DP_APP_IDX      0x0000
 #define DP_GATEWAY_ADDR 0x0001
 #define DP_GROUP_ADDR   0xC000
 // Pre-registered sensor address range on the gateway. Must be <=
-// CONFIG_BLE_MESH_MAX_PROV_NODES (default 10).
+// CONFIG_BLE_MESH_MAX_PROV_NODES (default 10)
 #define DP_MAX_SENSORS 8
 
 static const uint8_t DP_NET_KEY[16] = {
@@ -80,6 +83,7 @@ static const uint8_t DP_APP_KEY[16] = {
 
 static dp_mesh_role_t s_role;
 static dp_mesh_status_handler_t s_handler;
+static dp_mesh_diag_handler_t s_diag_handler;
 static SemaphoreHandle_t s_bt_sync;
 static uint16_t s_local_addr;
 static uint8_t s_dev_uuid[16];
@@ -101,10 +105,11 @@ static esp_ble_mesh_model_t root_models[] = {
 
 static esp_ble_mesh_model_op_t vnd_op[] = {
     ESP_BLE_MESH_MODEL_OP(DP_OP_STATUS_PUB, BERTH_STATUS_WIRE_LEN),
+    ESP_BLE_MESH_MODEL_OP(DP_OP_DIAG_PUB, BERTH_DIAG_WIRE_LEN),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 
-ESP_BLE_MESH_MODEL_PUB_DEFINE(vnd_pub, BERTH_STATUS_WIRE_LEN + 3, ROLE_PROVISIONER);
+ESP_BLE_MESH_MODEL_PUB_DEFINE(vnd_pub, DP_PUB_BUF_LEN, ROLE_PROVISIONER);
 
 static esp_ble_mesh_model_t vnd_models[] = {
     ESP_BLE_MESH_VENDOR_MODEL(DP_CID, DP_VND_MODEL_ID, vnd_op, &vnd_pub, NULL),
@@ -122,7 +127,7 @@ static esp_ble_mesh_comp_t comp = {
 
 // Filled in at dp_mesh_init time — `prov_unicast_addr` is a const
 // member so we can't poke it after construction. We memcpy a fully
-// designated initializer into this storage on init.
+// designated initializer into this storage on init
 static esp_ble_mesh_prov_t prov_cfg;
 
 static void on_ble_reset(int reason) { ESP_LOGW(TAG, "ble host reset reason=%d", reason); }
@@ -216,16 +221,30 @@ static void on_model(esp_ble_mesh_model_cb_event_t event, esp_ble_mesh_model_cb_
         ESP_LOGI(TAG, "model rx opcode=0x%06" PRIx32 " src=0x%04x len=%u",
                  param->model_operation.opcode, param->model_operation.ctx->addr,
                  param->model_operation.length);
-        if (param->model_operation.opcode == DP_OP_STATUS_PUB && s_role == DP_MESH_ROLE_GATEWAY) {
+        if (s_role != DP_MESH_ROLE_GATEWAY) {
+            break;
+        }
+        if (param->model_operation.opcode == DP_OP_STATUS_PUB) {
             berth_status_t s;
             esp_err_t err =
                 berth_status_unpack(param->model_operation.msg, param->model_operation.length, &s);
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "rx unpack err=%d len=%u", err, param->model_operation.length);
+                ESP_LOGW(TAG, "rx status unpack err=%d len=%u", err, param->model_operation.length);
                 break;
             }
             if (s_handler) {
                 s_handler(&s, param->model_operation.ctx->addr);
+            }
+        } else if (param->model_operation.opcode == DP_OP_DIAG_PUB) {
+            berth_diag_t d;
+            esp_err_t err =
+                berth_diag_unpack(param->model_operation.msg, param->model_operation.length, &d);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "rx diag unpack err=%d len=%u", err, param->model_operation.length);
+                break;
+            }
+            if (s_diag_handler) {
+                s_diag_handler(&d, param->model_operation.ctx->addr);
             }
         }
         break;
@@ -254,7 +273,7 @@ static void register_phantom_peer(uint16_t addr)
     }
     // With CONFIG_BLE_MESH_SETTINGS=y the node DB is restored from NVS
     // on boot, so peers from a previous session are already registered.
-    // Re-registering would fail with EEXIST — skip cleanly instead.
+    // Re-registering would fail with EEXIST — skip cleanly instead
     if (esp_ble_mesh_provisioner_get_node_with_addr(addr)) {
         ESP_LOGI(TAG, "phantom peer 0x%04x already in DB", addr);
         return;
@@ -263,7 +282,7 @@ static void register_phantom_peer(uint16_t addr)
     uint8_t uuid[16] = {'d', 'p', '-', 'p', 'h', 'a', 'n', 't', 'o', 'm', 0};
     uuid[14] = (uint8_t)(addr & 0xFF);
     uuid[15] = (uint8_t)(addr >> 8);
-    uint8_t dev_key[16] = {0}; // unused — we never send DEVKEY-encrypted msgs to peers
+    uint8_t dev_key[16] = {0}; // unused, never send DEVKEY-encrypted msgs to peers
     uint16_t index = 0;
     int rc = bt_mesh_provisioner_provision(&bd_addr, uuid, 0, addr, 1, DP_NET_IDX, 0, 0, dev_key,
                                            &index, false);
@@ -305,7 +324,7 @@ esp_err_t dp_mesh_init(dp_mesh_role_t role)
         // onboard others — provisioner_prov_enable is called only so
         // the local-data API will accept our key/bind calls — but the
         // value still has to pass validation. 0x7FFF is the top of the
-        // unicast range, safely past anything we hand out ourselves.
+        // unicast range, safely past anything we hand out ourselves
         .prov_start_address = 0x7FFF,
         .prov_attention = 0,
         .prov_algorithm = 0,
@@ -350,7 +369,7 @@ esp_err_t dp_mesh_init(dp_mesh_role_t role)
     // (net_idx=0). add_local_net_key explicitly rejects net_idx=0 — see
     // esp_ble_mesh_networking_api.c — so to install our deterministic
     // shared key we have to *update* the primary instead of adding a
-    // new one.
+    // new one
     err = esp_ble_mesh_provisioner_update_local_net_key(DP_NET_KEY, DP_NET_IDX);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "update_local_net_key err=%d", err);
@@ -365,7 +384,7 @@ esp_err_t dp_mesh_init(dp_mesh_role_t role)
 
     // Provisioner-side bind: signature is (elem_addr, app_idx, model_id,
     // company_id). The 0xFFFF cid sentinel is the *node*-side bind, a
-    // different API in local_data_operation_api.h.
+    // different API in local_data_operation_api.h
     err = esp_ble_mesh_provisioner_bind_app_key_to_local_model(s_local_addr, DP_APP_IDX,
                                                                DP_VND_MODEL_ID, DP_CID);
     if (err != ESP_OK) {
@@ -385,7 +404,7 @@ esp_err_t dp_mesh_init(dp_mesh_role_t role)
         // gateway. We do the inverse here so each side accepts the
         // other's traffic (the gateway itself runs the matching loop
         // below). See bt_mesh_provisioner_get_node_with_addr filter
-        // in core/net.c:1885.
+        // in core/net.c:1885
         register_phantom_peer(DP_GATEWAY_ADDR);
     } else {
         err = esp_ble_mesh_model_subscribe_group_addr(s_local_addr, DP_CID, DP_VND_MODEL_ID,
@@ -397,7 +416,7 @@ esp_err_t dp_mesh_init(dp_mesh_role_t role)
 
         // Pre-register every possible sensor address. Inflates the
         // node DB by DP_MAX_SENSORS entries even if some slots are
-        // never used; cheap.
+        // never used; cheap
         for (uint16_t i = 0; i < DP_MAX_SENSORS; i++) {
             register_phantom_peer(DP_GATEWAY_ADDR + 1 + i);
         }
@@ -444,5 +463,43 @@ esp_err_t dp_mesh_set_status_handler(dp_mesh_status_handler_t cb)
         return ESP_ERR_INVALID_STATE;
     }
     s_handler = cb;
+    return ESP_OK;
+}
+
+esp_err_t dp_mesh_publish_diag(const berth_diag_t *d)
+{
+    if (!d) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_role != DP_MESH_ROLE_SENSOR) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (vnd_pub.publish_addr == ESP_BLE_MESH_ADDR_UNASSIGNED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t wire[BERTH_DIAG_WIRE_LEN];
+    size_t wire_len = 0;
+    esp_err_t err = berth_diag_pack(d, wire, sizeof(wire), &wire_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = esp_ble_mesh_model_publish(&vnd_models[0], DP_OP_DIAG_PUB, (uint16_t)wire_len, wire,
+                                     ROLE_PROVISIONER);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "publish diag err=%d", err);
+        return ESP_FAIL;
+    }
+    ESP_LOGD(TAG, "published diag berth_id=%u raw_cm=%u", d->berth_id, d->raw_distance_cm);
+    return ESP_OK;
+}
+
+esp_err_t dp_mesh_set_diag_handler(dp_mesh_diag_handler_t cb)
+{
+    if (s_role != DP_MESH_ROLE_GATEWAY) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_diag_handler = cb;
     return ESP_OK;
 }
