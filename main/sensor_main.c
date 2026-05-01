@@ -68,9 +68,10 @@ void dp_sensor_run(void)
 
     // The HMMD occasionally drops out of Report mode (silent, no error
     // surfaces). After this many back-to-back read timeouts, we nudge
-    // it back by re-sending the mode-change command. ~10 misses ≈ 2 s
-    // at the 200 ms read cadence — long enough to skip the radar's
-    // own brief calibration pauses without false-positive recovery
+    // it back by re-sending the mode-change command. Worst case per
+    // miss is ~700 ms (500 ms read timeout + 200 ms gap), so 10 misses
+    // ≈ 7 s — long enough to skip the radar's own brief calibration
+    // pauses without false-positive recovery
     const int RECOVERY_THRESHOLD = 10;
     int consecutive_failures = 0;
 

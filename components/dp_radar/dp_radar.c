@@ -267,8 +267,6 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     }
 }
 
-esp_err_t dp_radar_deinit(void) { return uart_driver_delete(RADAR_PORT); }
-
 #elif CONFIG_DOCKPULSE_ROLE_SENSOR && CONFIG_DOCKPULSE_RADAR_FAKE
 
 // Fake radar for bench-testing the mesh + gateway path with no
@@ -312,7 +310,6 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     return ESP_OK;
 }
 
-esp_err_t dp_radar_deinit(void) { return ESP_OK; }
 esp_err_t dp_radar_enter_report_mode(void) { return ESP_OK; }
 
 #else // !CONFIG_DOCKPULSE_ROLE_SENSOR — stub out for gateway build
@@ -324,7 +321,6 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     (void)timeout;
     return ESP_ERR_NOT_SUPPORTED;
 }
-esp_err_t dp_radar_deinit(void) { return ESP_OK; }
 esp_err_t dp_radar_enter_report_mode(void) { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif
