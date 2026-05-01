@@ -9,7 +9,7 @@
 // Protocol → Module Report Data → Report Mode".
 //
 // Mode-change uses the Command frame format (header FD FC FB FA, tail
-// 04 03 02 01) with command 0x0012 / value 0x00000004.
+// 04 03 02 01) with command 0x0012 / value 0x00000004
 
 #include "dp_radar.h"
 
@@ -51,7 +51,7 @@ static const uint8_t CMD_ENTER_REPORT_MODE[] = {
 // HMMD protocol, responses use the same FD FC FB FA / 04 03 02 01
 // framing as requests, with body[0..1] = req_cmd | 0x0100 (response
 // bit). We don't validate the rest of the body — a matching cmd word
-// is enough to confirm the module saw and accepted the request.
+// is enough to confirm the module saw and accepted the request
 static esp_err_t read_command_ack(uint16_t req_cmd, TickType_t timeout)
 {
     enum { SYNC_HDR, READ_LEN, READ_BODY } state = SYNC_HDR;
@@ -122,7 +122,7 @@ static esp_err_t read_command_ack(uint16_t req_cmd, TickType_t timeout)
 
 // Send the mode-change command. Idempotent — safe to call repeatedly
 // for recovery when the module appears to have stopped streaming.
-// Logs ACK status. Flushes any data the module dribbled back.
+// Logs ACK status. Flushes any data the module dribbled back
 esp_err_t dp_radar_enter_report_mode(void)
 {
     int written =
@@ -162,13 +162,13 @@ esp_err_t dp_radar_init(void)
 
     // Best-effort. Failure here is most often a wiring/baud problem,
     // which dp_radar_read() will surface as repeated timeouts and the
-    // sensor loop will recover from by re-sending the command.
+    // sensor loop will recover from by re-sending the command
     dp_radar_enter_report_mode();
     return ESP_OK;
 }
 
 // Read until we have a full report frame (header...tail, length-validated).
-// Returns ESP_OK on a valid frame, ESP_ERR_TIMEOUT if `timeout` elapsed.
+// Returns ESP_OK on a valid frame, ESP_ERR_TIMEOUT if `timeout` elapsed
 esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
 {
     if (!out)
@@ -180,7 +180,7 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     // buffer holds stale, mid-frame garbage from an indeterminate
     // overflow point. Flushing here forces the parser to re-sync
     // against the next freshly-received frame instead of chewing
-    // through KB of out-of-band bytes hunting for a header.
+    // through KB of out-of-band bytes hunting for a header
     uart_flush_input(RADAR_PORT);
 
     enum { SYNC_HDR, READ_LEN, READ_BODY } state = SYNC_HDR;
@@ -272,7 +272,7 @@ esp_err_t dp_radar_deinit(void) { return uart_driver_delete(RADAR_PORT); }
 // Fake radar for bench-testing the mesh + gateway path with no
 // hardware attached. Walks the distance through a 30-step cycle so
 // the gateway sees a recognisable pattern, with one synthetic peak in
-// the gate matching the current distance.
+// the gate matching the current distance
 
 #include <string.h>
 
@@ -311,6 +311,7 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
 }
 
 esp_err_t dp_radar_deinit(void) { return ESP_OK; }
+esp_err_t dp_radar_enter_report_mode(void) { return ESP_OK; }
 
 #else // !CONFIG_DOCKPULSE_ROLE_SENSOR — stub out for gateway build
 
@@ -322,5 +323,6 @@ esp_err_t dp_radar_read(dp_radar_sample_t *out, TickType_t timeout)
     return ESP_ERR_NOT_SUPPORTED;
 }
 esp_err_t dp_radar_deinit(void) { return ESP_OK; }
+esp_err_t dp_radar_enter_report_mode(void) { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif
