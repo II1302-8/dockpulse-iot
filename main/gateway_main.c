@@ -5,6 +5,7 @@
 
 #include "dp_common.h"
 #include "dp_gateway.h"
+#include "dp_io.h"
 #include "dp_mesh.h"
 
 static const char *TAG = "gateway";
@@ -31,6 +32,7 @@ void dp_gateway_run(void)
         .status_cb = on_status,
         .diag_cb = on_diag,
     }));
+    dp_led_set(DP_LED_OK);
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(10000));

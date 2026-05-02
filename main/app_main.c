@@ -2,6 +2,9 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "dp_io.h"
+#include "dp_prov.h"
+
 static const char *TAG = "dockpulse";
 
 #if CONFIG_DOCKPULSE_ROLE_SENSOR
@@ -21,15 +24,26 @@ static void init_nvs(void)
     ESP_ERROR_CHECK(err);
 }
 
+static void on_factory_reset(void *ctx)
+{
+    (void)ctx;
+    dp_led_set(DP_LED_ERROR);
+    dp_prov_factory_reset();
+}
+
 void app_main(void)
 {
     init_nvs();
+    dp_prov_init();
+    dp_led_init();
+    dp_button_init(on_factory_reset, NULL);
+    dp_led_set(DP_LED_IDLE);
 
 #if CONFIG_DOCKPULSE_ROLE_SENSOR
-    ESP_LOGI(TAG, "boot: role=sensor node=%d", CONFIG_DOCKPULSE_NODE_ID);
+    ESP_LOGI(TAG, "boot: role=sensor");
     dp_sensor_run();
 #elif CONFIG_DOCKPULSE_ROLE_GATEWAY
-    ESP_LOGI(TAG, "boot: role=gateway node=%d", CONFIG_DOCKPULSE_NODE_ID);
+    ESP_LOGI(TAG, "boot: role=gateway");
     dp_gateway_run();
 #else
 #error "Select DOCKPULSE_ROLE via menuconfig"
