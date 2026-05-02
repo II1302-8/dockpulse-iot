@@ -130,15 +130,12 @@ static void handle_provision_req(const char *payload, int len)
         ESP_LOGW(TAG, "bad json on provision/req");
         return;
     }
-    const char *req_id =
-        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "req_id"));
-    const char *uuid_hex =
-        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "uuid"));
+    const char *req_id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "req_id"));
+    const char *uuid_hex = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "uuid"));
     const char *oob_hex = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "oob"));
     cJSON *ttl_j = cJSON_GetObjectItemCaseSensitive(root, "ttl_s");
     // optional extension — backend may include the assigned berth
-    const char *berth =
-        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "berth_id"));
+    const char *berth = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "berth_id"));
 
     if (!req_id || !uuid_hex) {
         ESP_LOGW(TAG, "missing req_id/uuid");
@@ -183,8 +180,8 @@ static void handle_provision_req(const char *payload, int len)
 
     ESP_LOGI(TAG, "req %s uuid=%02x%02x%02x... oob=%d berth=%s", s_inflight.req_id, uuid[0],
              uuid[1], uuid[2], have_oob ? 1 : 0, s_inflight.berth_id);
-    esp_err_t err = dp_mesh_gateway_provision(uuid, have_oob ? oob : NULL, timeout_ms,
-                                              on_prov_done, NULL);
+    esp_err_t err =
+        dp_mesh_gateway_provision(uuid, have_oob ? oob : NULL, timeout_ms, on_prov_done, NULL);
     if (err != ESP_OK) {
         publish_resp_err(s_inflight.req_id, "start-fail", esp_err_to_name(err));
         s_inflight.active = false;
@@ -206,8 +203,7 @@ esp_err_t dp_gateway_adopt_init(void)
 {
     dp_gateway_mqtt_set_msg_cb(on_msg);
     char topic[160];
-    snprintf(topic, sizeof(topic), "dockpulse/v1/gw/%s/provision/req",
-             CONFIG_DOCKPULSE_GATEWAY_ID);
+    snprintf(topic, sizeof(topic), "dockpulse/v1/gw/%s/provision/req", CONFIG_DOCKPULSE_GATEWAY_ID);
     return dp_gateway_mqtt_subscribe(topic, 1);
 }
 

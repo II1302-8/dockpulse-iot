@@ -21,7 +21,7 @@ extern const char client_key_start[] asm("_binary_client_key_start");
 
 static const char *TAG = "dp_gw_mqtt";
 
-#define MQTT_CONNECTED_BIT BIT0
+#define MQTT_CONNECTED_BIT  BIT0
 #define DP_MAX_PENDING_SUBS 4
 
 static esp_mqtt_client_handle_t s_client;
@@ -40,8 +40,8 @@ static void apply_pending_subs(void)
 {
     for (int i = 0; i < DP_MAX_PENDING_SUBS; i++) {
         if (s_pending_subs[i].active) {
-            int mid = esp_mqtt_client_subscribe(s_client, s_pending_subs[i].topic,
-                                                s_pending_subs[i].qos);
+            int mid =
+                esp_mqtt_client_subscribe(s_client, s_pending_subs[i].topic, s_pending_subs[i].qos);
             ESP_LOGI(TAG, "subscribe %s qos=%d mid=%d", s_pending_subs[i].topic,
                      s_pending_subs[i].qos, mid);
         }

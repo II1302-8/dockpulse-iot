@@ -50,11 +50,11 @@ static const char *TAG = "dp_mesh";
 #define DP_OP_DIAG_PUB   ESP_BLE_MESH_MODEL_OP_3(0x02, DP_CID)
 #define DP_PUB_BUF_LEN   (BERTH_DIAG_WIRE_LEN + 3)
 
-#define DP_NET_IDX      0x0000
-#define DP_APP_IDX      0x0000
-#define DP_GATEWAY_ADDR 0x0001
-#define DP_GROUP_ADDR   0xC000
-#define DP_MAX_SENSORS  8
+#define DP_NET_IDX         0x0000
+#define DP_APP_IDX         0x0000
+#define DP_GATEWAY_ADDR    0x0001
+#define DP_GROUP_ADDR      0xC000
+#define DP_MAX_SENSORS     8
 #define DP_PROV_START_ADDR (DP_GATEWAY_ADDR + 1)
 
 // Static keys remain — backend doesn't need rotated keys for the
@@ -258,8 +258,7 @@ static void on_prov(esp_ble_mesh_prov_cb_event_t event, esp_ble_mesh_prov_cb_par
         ESP_LOGI(TAG, "gw netkey added err=%d", param->provisioner_add_net_key_comp.err_code);
         break;
     case ESP_BLE_MESH_PROVISIONER_UPDATE_LOCAL_NET_KEY_COMP_EVT:
-        ESP_LOGI(TAG, "gw netkey updated err=%d",
-                 param->provisioner_update_net_key_comp.err_code);
+        ESP_LOGI(TAG, "gw netkey updated err=%d", param->provisioner_update_net_key_comp.err_code);
         break;
     case ESP_BLE_MESH_PROVISIONER_ADD_LOCAL_APP_KEY_COMP_EVT:
         ESP_LOGI(TAG, "gw appkey added err=%d", param->provisioner_add_app_key_comp.err_code);
@@ -276,8 +275,7 @@ static void on_prov(esp_ble_mesh_prov_cb_event_t event, esp_ble_mesh_prov_cb_par
         break;
     }
     case ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT:
-        ESP_LOGI(TAG, "gw prov link open bearer=%d",
-                 param->provisioner_prov_link_open.bearer);
+        ESP_LOGI(TAG, "gw prov link open bearer=%d", param->provisioner_prov_link_open.bearer);
         break;
     case ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT:
         ESP_LOGW(TAG, "gw prov link close bearer=%d reason=%d",
@@ -339,8 +337,8 @@ static void on_model(esp_ble_mesh_model_cb_event_t event, esp_ble_mesh_model_cb_
             }
         } else if (param->model_operation.opcode == DP_OP_DIAG_PUB) {
             berth_diag_t d;
-            if (berth_diag_unpack(param->model_operation.msg, param->model_operation.length,
-                                  &d) != ESP_OK) {
+            if (berth_diag_unpack(param->model_operation.msg, param->model_operation.length, &d) !=
+                ESP_OK) {
                 ESP_LOGW(TAG, "rx diag unpack fail len=%u", param->model_operation.length);
                 break;
             }
@@ -368,8 +366,7 @@ static void on_cfg_server(esp_ble_mesh_cfg_server_cb_event_t event,
     }
     uint32_t op = param->ctx.recv_op;
     ESP_LOGI(TAG, "cfg srv state-change op=0x%04" PRIx32, op);
-    if (op == ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND ||
-        op == ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET) {
+    if (op == ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND || op == ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET) {
         // bind or pub-set received — vendor model can publish now
         fire_sensor_ready();
     }
@@ -638,8 +635,8 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
         }
     }
 
-    err = esp_ble_mesh_init(&prov_cfg,
-                            s_role == DP_MESH_ROLE_GATEWAY ? &comp_gateway : &comp_sensor);
+    err =
+        esp_ble_mesh_init(&prov_cfg, s_role == DP_MESH_ROLE_GATEWAY ? &comp_gateway : &comp_sensor);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_mesh_init err=%d", err);
         return err;
@@ -661,8 +658,8 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
             ESP_LOGE(TAG, "add_local_app_key err=%d", err);
             return err;
         }
-        err = esp_ble_mesh_provisioner_bind_app_key_to_local_model(
-            DP_GATEWAY_ADDR, DP_APP_IDX, DP_VND_MODEL_ID, DP_CID);
+        err = esp_ble_mesh_provisioner_bind_app_key_to_local_model(DP_GATEWAY_ADDR, DP_APP_IDX,
+                                                                   DP_VND_MODEL_ID, DP_CID);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "local bind err=%d", err);
             return err;
