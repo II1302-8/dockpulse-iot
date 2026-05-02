@@ -1,0 +1,5 @@
+## https://components.espressif.com/components/espressif/led_strip
+dependencies:
+  idf:
+    version: ">=5.3"
+  espressif/led_strip: "^2.5"

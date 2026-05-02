@@ -28,11 +28,21 @@ menu "DockPulse"
         int "Status LED GPIO (-1 to disable)"
         default 8
         help
-            ESP32-C3 SuperMini onboard LED is GPIO 8 (active-low).
+            Waveshare ESP32-C3-Zero onboard WS2812 RGB is GPIO 8.
+            Plain LED on a C3 SuperMini is also GPIO 8 (active-low).
+
+    config DOCKPULSE_LED_WS2812
+        bool "LED is WS2812 (addressable RGB)"
+        default y
+        help
+            Drive via led_strip RMT, map states to colors (green=ok,
+            blue=provisioning, red=error). Off = plain GPIO via
+            gpio_set_level.
 
     config DOCKPULSE_LED_ACTIVE_LOW
-        bool "LED is active-low"
+        bool "Plain-LED active-low (ignored when WS2812)"
         default y
+        depends on !DOCKPULSE_LED_WS2812
 
     config DOCKPULSE_FACTORY_RESET_GPIO
         int "Factory-reset button GPIO (-1 to disable)"

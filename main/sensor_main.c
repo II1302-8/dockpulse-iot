@@ -55,13 +55,18 @@ static berth_diag_t to_diag(const dp_radar_sample_t *s, uint8_t node_id, uint16_
 
 void dp_sensor_run(void)
 {
-    ESP_ERROR_CHECK(dp_radar_init());
-
     dp_led_set(DP_LED_PROVISIONING);
     ESP_ERROR_CHECK(dp_mesh_init(&(const dp_mesh_cfg_t){
         .role = DP_MESH_ROLE_SENSOR,
         .sensor_ready = on_sensor_ready,
     }));
+
+    // defer radar until adopted saves UART power and log noise
+    while (!s_mesh_ready) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_LOGI(TAG, "adopted — bringing up radar");
+    ESP_ERROR_CHECK(dp_radar_init());
 
     uint8_t node_id = (uint8_t)CONFIG_DOCKPULSE_NODE_ID;
 
@@ -107,18 +112,13 @@ void dp_sensor_run(void)
                      s.gate_energy[9], s.gate_energy[10], s.gate_energy[11], s.gate_energy[12],
                      s.gate_energy[13], s.gate_energy[14], s.gate_energy[15]);
 
-            if (s_mesh_ready) {
-                // berth_id field is informational (gateway prefers its
-                // unicast->berth lookup); send NODE_ID as bench fallback
-                berth_status_t status = to_status(&s, near, node_id, node_id);
-                dp_mesh_publish_status(&status);
+            // berth_id is just a hint gateway uses its unicast->berth lookup
+            berth_status_t status = to_status(&s, near, node_id, node_id);
+            dp_mesh_publish_status(&status);
 #if CONFIG_DOCKPULSE_DIAG_ENABLE
-                berth_diag_t diag = to_diag(&s, node_id, node_id);
-                dp_mesh_publish_diag(&diag);
+            berth_diag_t diag = to_diag(&s, node_id, node_id);
+            dp_mesh_publish_diag(&diag);
 #endif
-            } else {
-                ESP_LOGD(TAG, "skip publish — not adopted");
-            }
             last_publish = now;
         }
 
