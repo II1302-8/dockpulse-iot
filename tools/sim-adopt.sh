@@ -1,19 +1,14 @@
 #!/usr/bin/env bash
-# Bench-test helper for QR adoption: composes the sensor's mesh UUID
-# from its MAC, the placeholder static OOB from dp_mesh.c, and emits
-# a fake `dockpulse/v1/gw/{gw_id}/provision/req` to a local mosquitto.
+# bench helper for QR adoption. composes mesh UUID from MAC pushes a
+# fake provision/req to local mosquitto waits for resp
 #
-# Usage:
+# usage:
 #   tools/sim-adopt.sh -m AABBCCDDEEFF -b ksss-saltsjobaden-pier-1-t1
-#   tools/sim-adopt.sh -m AA:BB:CC:DD:EE:FF -g gw-001 -h 127.0.0.1
+#   tools/sim-adopt.sh -u <full-32-hex-uuid> -g gw-001 -h 127.0.0.1
 #
-# MAC comes from the sensor's boot log — look for a line like
+# MAC or full UUID comes from sensor boot log line:
 #   I (1234) dp_mesh: ready role=sensor uuid=aabbccddeeff444f434b50554c534501
-# the first 12 hex chars (6 bytes) are the MAC; everything after is the
-# 'DOCKPULSE' marker the firmware appends.
-#
-# Listens for the gateway's reply on dockpulse/v1/gw/{gw_id}/provision/resp
-# for up to 65 seconds before giving up.
+# first 12 hex = MAC rest = DOCKPULSE marker firmware appends
 
 set -euo pipefail
 
@@ -26,8 +21,7 @@ HOST="127.0.0.1"
 PORT="1883"
 REQ_ID="bench-$(date +%s)"
 TTL_S=60
-# placeholder static OOB from components/dp_mesh/dp_mesh.c — must
-# match what the gateway pushes via set_static_oob_value
+# placeholder OOB from dp_mesh.c must match gateway set_static_oob_value
 OOB_HEX="64702d7374617469632d6f6f62000000"
 
 while [[ $# -gt 0 ]]; do
@@ -48,13 +42,13 @@ done
 [[ -n "$MAC" ]] || { echo "missing -m MAC (12 hex) or -u UUID (32 hex)" >&2; exit 2; }
 [[ -n "$BERTH" ]] || { echo "missing -b BERTH_ID" >&2; exit 2; }
 
-# normalise: strip colons/dashes/spaces, lowercase
+# strip colons dashes spaces lowercase
 HEX=$(printf '%s' "$MAC" | tr -d ':-' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
-MARKER_HEX="444f434b50554c5345"  # 'DOCKPULSE'
+MARKER_HEX="444f434b50554c5345"  # DOCKPULSE
 case ${#HEX} in
-    12) UUID_HEX="${HEX}${MARKER_HEX}01" ;;  # bare MAC -> append marker
-    32) UUID_HEX="$HEX" ;;                    # full UUID -> use as-is
-    *)  echo "expected 12 hex (MAC) or 32 hex (UUID), got ${#HEX}: '$HEX'" >&2; exit 2 ;;
+    12) UUID_HEX="${HEX}${MARKER_HEX}01" ;;  # bare MAC append marker
+    32) UUID_HEX="$HEX" ;;                    # full UUID use as-is
+    *)  echo "expected 12 hex (MAC) or 32 hex (UUID) got ${#HEX}: '$HEX'" >&2; exit 2 ;;
 esac
 
 REQ_TOPIC="dockpulse/v1/gw/${GW_ID}/provision/req"
@@ -71,5 +65,5 @@ mosquitto_pub -h "$HOST" -p "$PORT" -t "$REQ_TOPIC" -m "$PAYLOAD" -q 1
 
 echo
 echo "waiting on ${RESP_TOPIC} (timeout $((TTL_S + 5))s)..."
-# -C 1 = exit after one matching message; -W = timeout wrapper
+# -C 1 exit after first match -W timeout wrapper
 mosquitto_sub -h "$HOST" -p "$PORT" -t "$RESP_TOPIC" -W $((TTL_S + 5)) -C 1

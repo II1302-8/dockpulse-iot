@@ -1,17 +1,9 @@
-// BLE Mesh wrapper using esp_ble_mesh on NimBLE host. (NimBLE-mesh is
-// broken: per-buffer adv events never get ble_npl_event_init'd, legacy
-// adv worker is gated #ifdef MYNEWT, IDF blemesh example doesn't
-// exercise pub/sub.)
+// esp_ble_mesh on NimBLE host. NimBLE-mesh is broken (per-buffer adv
+// events never ble_npl_event_init'd legacy adv worker gated #ifdef MYNEWT)
 //
-// Topology: hub-and-spoke. Sensor=NODE, gateway=PROVISIONER. Real
-// PB-ADV: sensor advertises unprov beacon on first boot, gateway
-// provisions on demand from MQTT request, then binds AppKey + sets
-// publication via cfg client. Subsequent boots restore from NVS via
-// CONFIG_BLE_MESH_SETTINGS=y.
-//
-// Earlier self-provisioning hack (both sides as provisioners with
-// shared keys + phantom-peer registration) is gone — see git for the
-// archaeology.
+// hub-and-spoke topology. sensor=NODE gateway=PROVISIONER. real PB-ADV
+// kicked off by backend MQTT provision/req. cfg client binds AppKey
+// and sets pub addr. SETTINGS=y restores everything across reboots
 
 #include "dp_mesh.h"
 
@@ -57,9 +49,8 @@ static const char *TAG = "dp_mesh";
 #define DP_MAX_SENSORS     8
 #define DP_PROV_START_ADDR (DP_GATEWAY_ADDR + 1)
 
-// Static keys remain — backend doesn't need rotated keys for the
-// prototype, and PB-ADV still establishes a unique per-device DevKey.
-// NetKey/AppKey are pushed onto each new node by the provisioner.
+// shared NetKey/AppKey ok for prototype. PB-ADV still gives each
+// node a unique DevKey. provisioner pushes these to new nodes
 static const uint8_t DP_NET_KEY[16] = {
     'd', 'o', 'c', 'k', 'p', 'u', 'l', 's', 'e', '-', 'n', 'e', 't', 'k', 'e', 'y',
 };
@@ -243,8 +234,7 @@ static void on_prov(esp_ble_mesh_prov_cb_event_t event, esp_ble_mesh_prov_cb_par
         ESP_LOGI(TAG, "node prov complete addr=0x%04x net_idx=0x%04x iv=0x%08" PRIx32,
                  param->node_prov_complete.addr, param->node_prov_complete.net_idx,
                  param->node_prov_complete.iv_index);
-        // wait for cfg server to receive AppKey Add + Model App Bind
-        // before firing ready — see on_cfg_server below
+        // wait for AppKey Add + Model App Bind via cfg server below
         break;
     case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
         ESP_LOGW(TAG, "node prov reset");
@@ -367,13 +357,12 @@ static void on_cfg_server(esp_ble_mesh_cfg_server_cb_event_t event,
     uint32_t op = param->ctx.recv_op;
     ESP_LOGI(TAG, "cfg srv state-change op=0x%04" PRIx32, op);
     if (op == ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND || op == ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET) {
-        // bind or pub-set received — vendor model can publish now
+        // bind or pub-set received vendor model can publish
         fire_sensor_ready();
     }
 }
 
-// cfg client callback fires on the GATEWAY side after each
-// AppKeyAdd/ModelAppBind/ModelPubSet response
+// gateway-side cfg client cb. fires after each AppKeyAdd/Bind/PubSet response
 static void on_cfg_client(esp_ble_mesh_cfg_client_cb_event_t event,
                           esp_ble_mesh_cfg_client_cb_param_t *param)
 {
@@ -388,7 +377,7 @@ static void on_cfg_client(esp_ble_mesh_cfg_client_cb_event_t event,
         return;
     }
     if (event == ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT) {
-        // ignore — publish notifications, not response to our cmd
+        // ignore not response to our cmd
         return;
     }
     cfg_step_advance(s_prov_target_addr);
@@ -564,8 +553,7 @@ esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *stati
 static void make_dev_uuid(void)
 {
     if (s_role == DP_MESH_ROLE_SENSOR) {
-        // factory QR-encoded UUID — match between sensor beacon and
-        // backend's claim JWT
+        // factory QR-encoded UUID. matches sensor beacon to backend claim JWT
         if (dp_prov_get_dev_uuid(s_dev_uuid) == ESP_OK) {
             return;
         }
@@ -588,8 +576,8 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
     s_ready_cb = cfg->sensor_ready;
     make_dev_uuid();
 
-    // prov_unicast_addr / prov_start_address are const members — must
-    // initialize via designated init then memcpy
+    // prov_unicast_addr / prov_start_address are const fields. need
+    // designated init + memcpy to populate
     if (s_role == DP_MESH_ROLE_GATEWAY) {
         const esp_ble_mesh_prov_t init = {
             .uuid = s_dev_uuid,
@@ -674,7 +662,7 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
         s_local_addr = DP_GATEWAY_ADDR;
     } else {
         if (esp_ble_mesh_node_is_provisioned()) {
-            // restored from NVS — bindings + pub already in cfg_srv state
+            // restored from NVS bindings + pub already set
             fire_sensor_ready();
         } else {
             err = esp_ble_mesh_node_prov_enable(ESP_BLE_MESH_PROV_ADV);
@@ -685,7 +673,7 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
         }
     }
 
-    // log UUID hex so bench tests can copy-paste it into mosquitto_pub
+    // log UUID hex for sim-adopt copy-paste
     ESP_LOGI(TAG, "ready role=%s uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
              s_role == DP_MESH_ROLE_GATEWAY ? "gateway" : "sensor",
              s_dev_uuid[0], s_dev_uuid[1], s_dev_uuid[2], s_dev_uuid[3],

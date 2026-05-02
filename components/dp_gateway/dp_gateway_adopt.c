@@ -18,7 +18,7 @@ static const char *TAG = "dp_gw_adopt";
 
 #define DEFAULT_TTL_MS 60000
 
-// in-flight req — stack only handles one provision flow at a time
+// stack handles one provision flow at a time
 static struct {
     bool active;
     char req_id[64];
@@ -91,9 +91,8 @@ static void on_prov_done(const dp_mesh_prov_result_t *res, void *ctx)
         return;
     }
     if (res->ok) {
-        // record berth mapping if we have one (extension to backend
-        // protocol; if the req didn't carry berth_id, gateway falls
-        // back to addr-as-berth in uplink — see dp_gateway_uplink)
+        // record berth mapping if backend sent one. else uplink falls
+        // back to addr-as-berth (see dp_gateway_uplink)
         if (s_inflight.berth_id[0]) {
             dp_prov_record_berth(res->unicast_addr, s_inflight.berth_id);
         }
@@ -134,7 +133,7 @@ static void handle_provision_req(const char *payload, int len)
     const char *uuid_hex = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "uuid"));
     const char *oob_hex = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "oob"));
     cJSON *ttl_j = cJSON_GetObjectItemCaseSensitive(root, "ttl_s");
-    // optional extension — backend may include the assigned berth
+    // optional. backend may pass assigned berth
     const char *berth = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "berth_id"));
 
     if (!req_id || !uuid_hex) {

@@ -48,8 +48,7 @@ static void apply_pending_subs(void)
     }
 }
 
-// LWT topic + payload kept around for client lifetime — esp_mqtt_client
-// stores by reference, not copy
+// LWT topic + payload live for client lifetime. esp_mqtt_client stores by ref
 static char s_lwt_topic[160];
 static const char LWT_PAYLOAD[] = "{\"online\":false}";
 

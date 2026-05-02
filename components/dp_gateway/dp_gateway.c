@@ -28,10 +28,8 @@ static void now_iso8601(char *out, size_t cap)
     strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 }
 
-// Build a backend-format berth_id for the given mesh src addr. Tries
-// dp_prov first (set by adoption flow); falls back to legacy
-// CONFIG_DOCKPULSE_BERTH_ID_FORMAT + suffix table when no record
-// exists (bench testing without real adoption).
+// build berth_id from src_addr. dp_prov lookup first (adoption flow)
+// else BERTH_ID_FORMAT + suffix table (bench fallback)
 static const char *const SUFFIXES[12] = {
     "t1", "t2", "t3", "t4", "l1", "l2", "l3", "l4", "r1", "r2", "r3", "r4",
 };

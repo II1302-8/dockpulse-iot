@@ -138,8 +138,8 @@ esp_err_t dp_led_init(void)
 
 void dp_led_set(dp_led_state_t state) { s_led_state = state; }
 
-// Poll instead of ISR — GPIO 9 is also the C3 boot strap; ISR EDGE
-// races with whatever the boot ROM left. Poll loop debounces for free.
+// poll not ISR. gpio 9 is c3 boot strap so ISR edge races boot ROM.
+// poll loop debounces for free
 static void button_task(void *arg)
 {
     (void)arg;

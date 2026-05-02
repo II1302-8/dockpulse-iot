@@ -15,9 +15,7 @@ typedef enum {
 typedef void (*dp_mesh_status_handler_t)(const berth_status_t *s, uint16_t src_addr);
 typedef void (*dp_mesh_diag_handler_t)(const berth_diag_t *d, uint16_t src_addr);
 
-// Sensor: fired when PB-ADV completes (first boot) or when stack
-// finishes restoring from NVS (subsequent boots). After this fires the
-// sensor may publish.
+// sensor cb. fires after PB-ADV completes or NVS restore. publish ok after
 typedef void (*dp_mesh_sensor_ready_cb_t)(uint16_t unicast_addr);
 
 typedef struct {
@@ -31,9 +29,8 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg);
 esp_err_t dp_mesh_publish_status(const berth_status_t *s);
 esp_err_t dp_mesh_publish_diag(const berth_diag_t *d);
 
-// --- Gateway-only adoption API ---
-//
-// Result of a provision attempt. unicast_addr/dev_key only set on ok.
+// --- gateway adoption API ---
+// unicast_addr/dev_key only set on ok
 typedef struct {
     bool ok;
     uint16_t unicast_addr;
@@ -44,14 +41,9 @@ typedef struct {
 
 typedef void (*dp_mesh_prov_done_cb_t)(const dp_mesh_prov_result_t *res, void *ctx);
 
-// Start provisioning a sensor identified by mesh UUID. The gateway scans
-// for a matching unprov beacon, runs PB-ADV, then binds AppKey + sets
-// publication on the new node's vendor model. cb fires once with the
-// outcome. Only one provision flow at a time — returns ESP_ERR_INVALID_STATE
-// if another is in flight.
-//
-// `static_oob` is the 16-byte value the backend extracted from the QR
-// claim JWT. Pass NULL for OOB-less provisioning (prototype testing).
+// scan for unprov beacon matching uuid. run PB-ADV. push AppKey + pub via
+// cfg client. cb fires once. one flow at a time else ESP_ERR_INVALID_STATE.
+// static_oob is 16 bytes from backend QR JWT. NULL for OOB-less prototype
 esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *static_oob,
                                     uint32_t timeout_ms, dp_mesh_prov_done_cb_t cb, void *ctx);
 
