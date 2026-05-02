@@ -3,9 +3,10 @@ idf_component_register(
         "dp_gateway.c"
         "dp_gateway_wifi.c"
         "dp_gateway_mqtt.c"
+        "dp_gateway_adopt.c"
     INCLUDE_DIRS "include"
-    REQUIRES dp_common
-    PRIV_REQUIRES log esp_event esp_netif esp_wifi mqtt json esp-tls
+    REQUIRES dp_common dp_mesh dp_prov
+    PRIV_REQUIRES log esp_event esp_netif esp_wifi mqtt json esp-tls mbedtls
 )
 
 if(CONFIG_DOCKPULSE_ROLE_GATEWAY AND
