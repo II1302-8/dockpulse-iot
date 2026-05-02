@@ -15,13 +15,45 @@ menu "DockPulse"
     endchoice
 
     config DOCKPULSE_NODE_ID
-        int "Node ID (unique within installation)"
+        int "Node ID (legacy/bench fallback)"
         range 1 8
         default 1
         help
-            Sensor unicast addr = 0x0001 + NODE_ID. Gateway pre-registers
-            DP_MAX_SENSORS (8) sensor slots; raise both together if you
-            need more nodes.
+            Sensor `node_id` payload field + bench-mode berth-id index
+            (1..12 -> t1..t4 / l1..l4 / r1..r4). After QR provisioning
+            the unicast addr is assigned by PB-ADV and the berth id
+            comes from the gateway dp_prov table.
+
+    config DOCKPULSE_LED_GPIO
+        int "Status LED GPIO (-1 to disable)"
+        default 8
+        help
+            Waveshare ESP32-C3-Zero onboard WS2812 RGB is GPIO 8.
+            Plain LED on a C3 SuperMini is also GPIO 8 (active-low).
+
+    config DOCKPULSE_LED_WS2812
+        bool "LED is WS2812 (addressable RGB)"
+        default y
+        help
+            Drive via led_strip RMT, map states to colors (green=ok,
+            blue=provisioning, red=error). Off = plain GPIO via
+            gpio_set_level.
+
+    config DOCKPULSE_LED_ACTIVE_LOW
+        bool "Plain-LED active-low (ignored when WS2812)"
+        default y
+        depends on !DOCKPULSE_LED_WS2812
+
+    config DOCKPULSE_FACTORY_RESET_GPIO
+        int "Factory-reset button GPIO (-1 to disable)"
+        default 9
+        help
+            GPIO 9 = BOOT button on most C3 devkits. Long-press at
+            runtime; doesn't collide with bootloader strap.
+
+    config DOCKPULSE_FACTORY_RESET_HOLD_MS
+        int "Long-press hold time (ms)"
+        default 5000
 
     menu "Sensor"
         depends on DOCKPULSE_ROLE_SENSOR
@@ -162,6 +194,16 @@ menu "DockPulse"
             default "dock-a"
             help
                 Used as the {dock_id} segment of the MQTT topic.
+
+        config DOCKPULSE_GATEWAY_ID
+            string "Gateway ID (adoption topic segment)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            default "gw-001"
+            help
+                Used in dockpulse/v1/gw/{gw_id}/{...} topics for the
+                adoption protocol (provision/req, provision/resp,
+                status). Must match a row in the backend's gateways
+                table; the backend rejects requests for unknown ids.
 
         config DOCKPULSE_BERTH_ID_FORMAT
             string "Berth ID format (printf %s = suffix)"

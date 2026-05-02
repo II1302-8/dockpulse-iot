@@ -58,32 +58,46 @@ port that ships in the same IDF tree. Reasons are documented in
     packed `berth_diag_t` (segmented). Opt-in, gated by
     `CONFIG_DOCKPULSE_DIAG_ENABLE`.
 
-### Self-provisioning
+### PB-ADV provisioning
 
-Every node runs as a single-device PROVISIONER and self-configures via
-the local-data API. There is **no on-air provisioning handshake** —
-every node is hard-coded with the same NetKey, AppKey, and a
-deterministic unicast address derived from `CONFIG_DOCKPULSE_NODE_ID`:
+Sensor = NODE, gateway = PROVISIONER. Real PB-ADV handshake; on-air keys
++ unicast address are assigned by the gateway during adoption.
 
-| Role    | NODE_ID | Unicast addr |
-| ------- | ------- | ------------ |
-| Gateway | 1       | `0x0001`     |
-| Sensor  | N       | `0x0001 + N` |
+Adoption flow:
 
-The gateway pre-registers a phantom entry for every possible sensor
-address (`0x0002..0x0009`, configurable via `DP_MAX_SENSORS` in
-`dp_mesh.c`); each sensor pre-registers the gateway. This bypasses the
-`esp_ble_mesh` provisioner's source-address filter that would otherwise
-drop all peer traffic — see
-[troubleshooting.md](troubleshooting.md#provisioner-src-address-filter)
-for the deep dive on why this is needed.
+1. Operator scans the sensor's QR sticker in the dashboard. QR carries a
+   factory-signed claim JWT with `uuid`, `oob`, `serial_number`.
+2. Backend verifies the JWT, picks a target gateway + berth, publishes
+   `dockpulse/v1/gw/{gw_id}/provision/req` (qos 1, retained=false) with
+   `{req_id, uuid, oob, ttl_s, berth_id}`.
+3. Gateway sets the OOB value, filters scan beacons by UUID, runs
+   PB-ADV against the matching unprov sensor. Stack auto-allocates the
+   next free unicast in the gateway's `prov_start_address` range.
+4. Gateway pushes AppKey Add → Model App Bind → Model Pub Set via cfg
+   client to the new node, retrieves its DevKey, then publishes
+   `dockpulse/v1/gw/{gw_id}/provision/resp` with
+   `{req_id, status: "ok", unicast_addr, dev_key_fp}` (sha256(dev_key)
+   first 8 bytes hex). Errors yield `{status: "err", code, msg}`.
+5. Backend writes a `Node` row keyed on `unicast_addr` + `berth_id`.
+   Gateway records the same mapping locally in dp_prov NVS; uplink
+   uses it to render the MQTT topic.
 
-This is deliberately not a production-grade design: shared static keys,
-no auth, hardcoded address range, reliance on an internal API
-(`bt_mesh_provisioner_provision`). It is appropriate for the course
-prototype; replace with standard PB-ADV provisioning before any real
-deployment. See [troubleshooting.md](troubleshooting.md#standard-vs-self-provisioning)
-for the migration sketch.
+Gateway online/offline state: gateway publishes
+`dockpulse/v1/gw/{gw_id}/status` retained `{online: true}` on connect,
+LWT publishes `{online: false}` on disconnect.
+
+Hot-swap: re-running step 1 with a new sensor on a berth that already
+has a Node row replaces the gateway's old `unicast -> berth` mapping in
+dp_prov; the new node takes over publishing. Backend Node row is
+similarly replaced (server-side ticket).
+
+Factory reset: 5-second long-press on GPIO 9 wipes both dp_prov and
+the BLE Mesh stack NVS, then reboots into PB-ADV unprov mode.
+
+Bench / two-board testing: when no real backend is around, ship-time
+`CONFIG_DOCKPULSE_NODE_ID` still works as a payload `node_id` and
+fallback berth-id index — bring up gateway + sensor, leave gateway in
+`UPLINK_STUB=y` to skip MQTT.
 
 ## Wire format
 
@@ -216,27 +230,17 @@ routine operation.
 
 ```
 main/                 role dispatch + per-role event loops
-  app_main.c          NVS init + role select
-  sensor_main.c       sensor loop: radar read → publish
+  app_main.c          NVS init + LED/button + role select
+  sensor_main.c       sensor loop: radar read → publish (gated on adoption)
   gateway_main.c      gateway loop: rx callback → uplink
 
-components/dp_common  shared types and codec
-  dp_common.h         dp_radar_sample_t, berth_status_t,
-                      pack/unpack helpers
-  dp_common.c         CONFIG_DOCKPULSE_NODE_ID accessor + codec impl
-
+components/dp_common  shared types + codec
 components/dp_radar   Waveshare HMMD UART driver
-  dp_radar.c          frame parser, mode-change command, ACK parsing,
-                      fake-radar mode behind CONFIG_DOCKPULSE_RADAR_FAKE
-
-components/dp_mesh    esp_ble_mesh wrapper
-  dp_mesh.c           NimBLE host bringup, vendor model registration,
-                      self-provisioning, phantom-peer registration
-
-components/dp_gateway uplink (Wi-Fi STA + MQTT)
-  dp_gateway.c        berth_status_t → JSON, topic mapping
-  dp_gateway_wifi.c   Wi-Fi station bringup
-  dp_gateway_mqtt.c   MQTT client + QoS handling
+components/dp_mesh    esp_ble_mesh wrapper, PB-ADV adoption
+components/dp_prov    NVS unicast→berth_id map + factory reset
+components/dp_io      LED state machine + factory-reset button
+components/dp_gateway Wi-Fi + MQTT, MQTT adoption topics
+  dp_gateway_adopt.c  provision/req → mesh provision → provision/resp
 ```
 
 ## Sensor periodicity

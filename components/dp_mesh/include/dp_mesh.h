@@ -12,25 +12,40 @@ typedef enum {
     DP_MESH_ROLE_GATEWAY,
 } dp_mesh_role_t;
 
-// Status callback fired on the gateway when a sensor's berth_status_t
-// is received. `src_addr` is the mesh unicast address of the sender —
-// useful for diagnostics; the logical berth id lives in `s->berth_id`
 typedef void (*dp_mesh_status_handler_t)(const berth_status_t *s, uint16_t src_addr);
-
-// gateway rx callback for berth_diag_t
 typedef void (*dp_mesh_diag_handler_t)(const berth_diag_t *d, uint16_t src_addr);
 
-// Handlers are passed in at init time so they're stored before any
-// rx path can fire. Sensor role ignores both fields.
+// sensor cb. fires after PB-ADV completes or NVS restore. publish ok after
+typedef void (*dp_mesh_sensor_ready_cb_t)(uint16_t unicast_addr);
+
 typedef struct {
     dp_mesh_role_t role;
-    dp_mesh_status_handler_t status_cb;
-    dp_mesh_diag_handler_t diag_cb;
+    dp_mesh_status_handler_t status_cb;     // gateway only
+    dp_mesh_diag_handler_t diag_cb;         // gateway only
+    dp_mesh_sensor_ready_cb_t sensor_ready; // sensor only
 } dp_mesh_cfg_t;
 
 esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg);
 esp_err_t dp_mesh_publish_status(const berth_status_t *s);
 esp_err_t dp_mesh_publish_diag(const berth_diag_t *d);
+
+// --- gateway adoption API ---
+// unicast_addr/dev_key only set on ok
+typedef struct {
+    bool ok;
+    uint16_t unicast_addr;
+    uint8_t dev_key[16];
+    const char *err_code; // e.g. "timeout", "scan-miss", "bind-fail"
+    const char *err_msg;
+} dp_mesh_prov_result_t;
+
+typedef void (*dp_mesh_prov_done_cb_t)(const dp_mesh_prov_result_t *res, void *ctx);
+
+// scan for unprov beacon matching uuid. run PB-ADV. push AppKey + pub via
+// cfg client. cb fires once. one flow at a time else ESP_ERR_INVALID_STATE.
+// static_oob is 16 bytes from backend QR JWT. NULL for OOB-less prototype
+esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *static_oob,
+                                    uint32_t timeout_ms, dp_mesh_prov_done_cb_t cb, void *ctx);
 
 #ifdef __cplusplus
 }

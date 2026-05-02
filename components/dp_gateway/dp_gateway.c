@@ -12,6 +12,7 @@
 #include "esp_log.h"
 
 #include "dp_gateway_priv.h"
+#include "dp_prov.h"
 
 static const char *TAG = "dp_gateway";
 
@@ -27,18 +28,25 @@ static void now_iso8601(char *out, size_t cap)
     strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 }
 
-// berth_id -> backend suffix (t1..t4, l1..l4, r1..r4). NULL if
-// out-of-range; caller should drop the publish, backend would reject
-// it as an unknown berth anyway
-static const char *berth_suffix(uint16_t idx)
+// build berth_id from src_addr. dp_prov lookup first (adoption flow)
+// else BERTH_ID_FORMAT + suffix table (bench fallback)
+static const char *const SUFFIXES[12] = {
+    "t1", "t2", "t3", "t4", "l1", "l2", "l3", "l4", "r1", "r2", "r3", "r4",
+};
+
+static bool render_berth_id(uint16_t src_addr, uint16_t fallback_idx, char *out, size_t cap)
 {
-    static const char *const SUFFIXES[12] = {
-        "t1", "t2", "t3", "t4", "l1", "l2", "l3", "l4", "r1", "r2", "r3", "r4",
-    };
-    if (idx >= 1 && idx <= 12) {
-        return SUFFIXES[idx - 1];
+    const char *mapped = dp_prov_lookup_berth(src_addr);
+    if (mapped && *mapped) {
+        strncpy(out, mapped, cap - 1);
+        out[cap - 1] = '\0';
+        return true;
     }
-    return NULL;
+    if (fallback_idx >= 1 && fallback_idx <= 12) {
+        snprintf(out, cap, CONFIG_DOCKPULSE_BERTH_ID_FORMAT, SUFFIXES[fallback_idx - 1]);
+        return true;
+    }
+    return false;
 }
 
 esp_err_t dp_gateway_init(void)
@@ -54,6 +62,7 @@ esp_err_t dp_gateway_init(void)
 #if CONFIG_DOCKPULSE_GATEWAY_UPLINK_STUB
     return ESP_OK;
 #else
+    dp_prov_init();
     esp_err_t err = dp_gateway_wifi_start_and_wait();
     if (err != ESP_OK) {
         return err;
@@ -61,6 +70,10 @@ esp_err_t dp_gateway_init(void)
     err = dp_gateway_mqtt_start_and_wait();
     if (err != ESP_OK) {
         return err;
+    }
+    err = dp_gateway_adopt_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "adopt init err=%d (provisioning won't work)", err);
     }
 #if CONFIG_DOCKPULSE_MQTT_SELFTEST
     berth_status_t fake = {
@@ -86,16 +99,15 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
              s->node_id, s->berth_id, s->occupied, s->sensor_raw_mm, (unsigned long)s->ts_ms);
     return ESP_OK;
 #else
-    const char *suffix = berth_suffix(s->berth_id);
-    if (!suffix) {
-        ESP_LOGW(TAG, "drop status, unknown berth_id=%u src=0x%04x", s->berth_id, src_addr);
-        return ESP_ERR_INVALID_ARG;
-    }
     char node_id[16];
     char berth_id[64];
     char ts_iso[32];
+    if (!render_berth_id(src_addr, s->berth_id, berth_id, sizeof(berth_id))) {
+        ESP_LOGW(TAG, "drop status, no berth mapping src=0x%04x payload_idx=%u", src_addr,
+                 s->berth_id);
+        return ESP_ERR_INVALID_ARG;
+    }
     snprintf(node_id, sizeof(node_id), "node-%03u", s->node_id);
-    snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
     now_iso8601(ts_iso, sizeof(ts_iso));
 
     // Topic format per docs/api/mqtt-contract.yml in the dockpulse repo:
@@ -144,16 +156,15 @@ esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
              src_addr, d->node_id, d->berth_id, d->target_state, d->raw_distance_cm);
     return ESP_OK;
 #else
-    const char *suffix = berth_suffix(d->berth_id);
-    if (!suffix) {
-        ESP_LOGW(TAG, "drop diag, unknown berth_id=%u src=0x%04x", d->berth_id, src_addr);
-        return ESP_ERR_INVALID_ARG;
-    }
     char node_id[16];
     char berth_id[64];
     char ts_iso[32];
+    if (!render_berth_id(src_addr, d->berth_id, berth_id, sizeof(berth_id))) {
+        ESP_LOGW(TAG, "drop diag, no berth mapping src=0x%04x payload_idx=%u", src_addr,
+                 d->berth_id);
+        return ESP_ERR_INVALID_ARG;
+    }
     snprintf(node_id, sizeof(node_id), "node-%03u", d->node_id);
-    snprintf(berth_id, sizeof(berth_id), CONFIG_DOCKPULSE_BERTH_ID_FORMAT, suffix);
     now_iso8601(ts_iso, sizeof(ts_iso));
 
     char topic[192];

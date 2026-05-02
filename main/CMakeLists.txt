@@ -11,5 +11,5 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."
-    REQUIRES dp_common dp_mesh dp_radar dp_gateway nvs_flash
+    REQUIRES dp_common dp_mesh dp_radar dp_gateway dp_prov dp_io nvs_flash
 )
