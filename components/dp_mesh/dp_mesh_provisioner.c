@@ -127,12 +127,10 @@ void dp_mesh_provisioner_handle_prov_event(esp_ble_mesh_prov_cb_event_t event,
         break;
     }
     case ESP_BLE_MESH_PROVISIONER_SET_DEV_UUID_MATCH_COMP_EVT:
-        ESP_LOGI(TAG, "uuid-match set err=%d",
-                 param->provisioner_set_dev_uuid_match_comp.err_code);
+        ESP_LOGI(TAG, "uuid-match set err=%d", param->provisioner_set_dev_uuid_match_comp.err_code);
         break;
     case ESP_BLE_MESH_PROVISIONER_SET_STATIC_OOB_VALUE_COMP_EVT:
-        ESP_LOGI(TAG, "static-oob set err=%d",
-                 param->provisioner_set_static_oob_val_comp.err_code);
+        ESP_LOGI(TAG, "static-oob set err=%d", param->provisioner_set_static_oob_val_comp.err_code);
         break;
     default:
         ESP_LOGD(TAG, "prov evt %d", (int)event);
