@@ -5,12 +5,14 @@
 #include "dp_gateway_priv.h"
 
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "mqtt_client.h"
 
 #if CONFIG_DOCKPULSE_MQTT_TLS
@@ -26,18 +28,24 @@ static const char *TAG = "dp_gw_mqtt";
 
 static esp_mqtt_client_handle_t s_client;
 static EventGroupHandle_t s_mqtt_events;
-static dp_gateway_mqtt_msg_cb_t s_msg_cb;
 
-// queued subs registered before broker connects (or before s_client init)
+// _Atomic: read on event task, written from app. no lock on rx
+static _Atomic(dp_gateway_mqtt_msg_cb_t) s_msg_cb;
+
+// queued subs pre-connect. s_subs_lock guards app + event task both touch
 typedef struct {
     char topic[96];
     int qos;
     bool active;
 } pending_sub_t;
 static pending_sub_t s_pending_subs[DP_MAX_PENDING_SUBS];
+static SemaphoreHandle_t s_subs_lock;
 
 static void apply_pending_subs(void)
 {
+    if (s_subs_lock) {
+        xSemaphoreTake(s_subs_lock, portMAX_DELAY);
+    }
     for (int i = 0; i < DP_MAX_PENDING_SUBS; i++) {
         if (s_pending_subs[i].active) {
             int mid =
@@ -45,6 +53,9 @@ static void apply_pending_subs(void)
             ESP_LOGI(TAG, "subscribe %s qos=%d mid=%d", s_pending_subs[i].topic,
                      s_pending_subs[i].qos, mid);
         }
+    }
+    if (s_subs_lock) {
+        xSemaphoreGive(s_subs_lock);
     }
 }
 
@@ -75,17 +86,19 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
         ESP_LOGW(TAG, "broker disconnected");
         xEventGroupClearBits(s_mqtt_events, MQTT_CONNECTED_BIT);
         break;
-    case MQTT_EVENT_DATA:
-        if (s_msg_cb && event && event->topic && event->data) {
+    case MQTT_EVENT_DATA: {
+        dp_gateway_mqtt_msg_cb_t cb = atomic_load(&s_msg_cb);
+        if (cb && event && event->topic && event->data) {
             // event->topic is NOT null-terminated; copy out
             char topic[160];
             int tlen = event->topic_len < (int)sizeof(topic) - 1 ? event->topic_len
                                                                  : (int)sizeof(topic) - 1;
             memcpy(topic, event->topic, tlen);
             topic[tlen] = '\0';
-            s_msg_cb(topic, event->data, event->data_len);
+            cb(topic, event->data, event->data_len);
         }
         break;
+    }
     case MQTT_EVENT_ERROR:
         if (event && event->error_handle) {
             ESP_LOGE(TAG, "broker error: type=%d tls=0x%x stack=0x%x sock=%d",
@@ -101,7 +114,7 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
 
 esp_err_t dp_gateway_mqtt_set_msg_cb(dp_gateway_mqtt_msg_cb_t cb)
 {
-    s_msg_cb = cb;
+    atomic_store(&s_msg_cb, cb);
     return ESP_OK;
 }
 
@@ -110,27 +123,40 @@ esp_err_t dp_gateway_mqtt_subscribe(const char *topic_filter, int qos)
     if (!topic_filter) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_subs_lock) {
+        xSemaphoreTake(s_subs_lock, portMAX_DELAY);
+    }
+    esp_err_t ret = ESP_ERR_NO_MEM;
     for (int i = 0; i < DP_MAX_PENDING_SUBS; i++) {
         if (!s_pending_subs[i].active) {
             strncpy(s_pending_subs[i].topic, topic_filter, sizeof(s_pending_subs[i].topic) - 1);
             s_pending_subs[i].qos = qos;
             s_pending_subs[i].active = true;
+            ret = ESP_OK;
             // if already connected, register now too
             if (s_client && s_mqtt_events &&
                 (xEventGroupGetBits(s_mqtt_events) & MQTT_CONNECTED_BIT)) {
                 int mid = esp_mqtt_client_subscribe(s_client, topic_filter, qos);
                 ESP_LOGI(TAG, "subscribe %s qos=%d mid=%d", topic_filter, qos, mid);
             }
-            return ESP_OK;
+            break;
         }
     }
-    return ESP_ERR_NO_MEM;
+    if (s_subs_lock) {
+        xSemaphoreGive(s_subs_lock);
+    }
+    return ret;
 }
 
 esp_err_t dp_gateway_mqtt_start_and_wait(void)
 {
     s_mqtt_events = xEventGroupCreate();
     if (!s_mqtt_events) {
+        return ESP_ERR_NO_MEM;
+    }
+    // before mqtt_start so event-task apply_pending_subs sees it
+    s_subs_lock = xSemaphoreCreateMutex();
+    if (!s_subs_lock) {
         return ESP_ERR_NO_MEM;
     }
 

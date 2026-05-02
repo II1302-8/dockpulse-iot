@@ -119,6 +119,7 @@ require_port() {
 #   NODE_ID  integer 1..255 (optional; empty = use whatever's in the
 #                            existing sdkconfig)
 #   FAKE_RADAR  empty | y | n (sensor-only)
+#   APP_ONLY    empty | y. skip bootloader+partition table on build/flash
 # Remaining unparsed args are left in REST=("${@}").
 parse_args() {
     ROLE=gateway
@@ -126,6 +127,7 @@ parse_args() {
     NODE_ID=""
     FAKE_RADAR=""
     ERASE=""
+    APP_ONLY=""
     REST=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -135,6 +137,7 @@ parse_args() {
             --fake)         FAKE_RADAR=y; shift ;;
             --real)         FAKE_RADAR=n; shift ;;
             --erase)        ERASE=y; shift ;;
+            -a|--app-only)  APP_ONLY=y; shift ;;
             -h|--help)      print_help; exit 0 ;;
             --)             shift; REST+=("$@"); break ;;
             *)              REST+=("$1"); shift ;;
