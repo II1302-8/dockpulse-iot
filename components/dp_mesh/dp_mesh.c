@@ -674,11 +674,11 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
     }
 
     // log UUID hex for sim-adopt copy-paste
-    ESP_LOGI(TAG, "ready role=%s uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-             s_role == DP_MESH_ROLE_GATEWAY ? "gateway" : "sensor",
-             s_dev_uuid[0], s_dev_uuid[1], s_dev_uuid[2], s_dev_uuid[3],
-             s_dev_uuid[4], s_dev_uuid[5], s_dev_uuid[6], s_dev_uuid[7],
-             s_dev_uuid[8], s_dev_uuid[9], s_dev_uuid[10], s_dev_uuid[11],
+    ESP_LOGI(TAG,
+             "ready role=%s uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+             s_role == DP_MESH_ROLE_GATEWAY ? "gateway" : "sensor", s_dev_uuid[0], s_dev_uuid[1],
+             s_dev_uuid[2], s_dev_uuid[3], s_dev_uuid[4], s_dev_uuid[5], s_dev_uuid[6],
+             s_dev_uuid[7], s_dev_uuid[8], s_dev_uuid[9], s_dev_uuid[10], s_dev_uuid[11],
              s_dev_uuid[12], s_dev_uuid[13], s_dev_uuid[14], s_dev_uuid[15]);
     return ESP_OK;
 }

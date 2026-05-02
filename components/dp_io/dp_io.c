@@ -28,26 +28,29 @@ static void *s_btn_ctx;
 // c3-zero LED is RGB-native led_strip 2.5.x only ships GRB so swap r/g here
 static inline void led_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!s_strip) return;
+    if (!s_strip)
+        return;
     led_strip_set_pixel(s_strip, 0, g, r, b);
     led_strip_refresh(s_strip);
 }
-#define LED_OFF()         led_rgb(0, 0, 0)
-#define LED_OK_COLOR()    led_rgb(0, 12, 0)     // dim green
-#define LED_PROV_COLOR()  led_rgb(0, 0, 24)     // medium blue
-#define LED_ERR_COLOR()   led_rgb(24, 0, 0)     // red
+#define LED_OFF()        led_rgb(0, 0, 0)
+#define LED_OK_COLOR()   led_rgb(0, 12, 0) // dim green
+#define LED_PROV_COLOR() led_rgb(0, 0, 24) // medium blue
+#define LED_ERR_COLOR()  led_rgb(24, 0, 0) // red
 #else
 static inline void led_drive(bool on)
 {
-    if (s_led_gpio < 0) return;
+    if (s_led_gpio < 0)
+        return;
     int level = on ? 1 : 0;
-    if (s_led_active_low) level = !level;
+    if (s_led_active_low)
+        level = !level;
     gpio_set_level((gpio_num_t)s_led_gpio, level);
 }
-#define LED_OFF()         led_drive(false)
-#define LED_OK_COLOR()    led_drive(true)
-#define LED_PROV_COLOR()  led_drive(true)
-#define LED_ERR_COLOR()   led_drive(true)
+#define LED_OFF()        led_drive(false)
+#define LED_OK_COLOR()   led_drive(true)
+#define LED_PROV_COLOR() led_drive(true)
+#define LED_ERR_COLOR()  led_drive(true)
 #endif
 
 static void led_task(void *arg)
@@ -73,7 +76,10 @@ static void led_task(void *arg)
         case DP_LED_PROVISIONING:
             // 4Hz easy to spot scanning QR
             on = !on;
-            if (on) LED_PROV_COLOR(); else LED_OFF();
+            if (on)
+                LED_PROV_COLOR();
+            else
+                LED_OFF();
             vTaskDelay(pdMS_TO_TICKS(125));
             break;
         case DP_LED_ERROR:
@@ -128,7 +134,8 @@ esp_err_t dp_led_init(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     esp_err_t err = gpio_config(&io);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK)
+        return err;
     led_drive(false);
 #endif
 
