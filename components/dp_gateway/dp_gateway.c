@@ -75,6 +75,10 @@ esp_err_t dp_gateway_init(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "adopt init err=%d (provisioning won't work)", err);
     }
+    err = dp_gateway_decom_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "decom init err=%d (decommission won't work)", err);
+    }
 #if CONFIG_DOCKPULSE_MQTT_SELFTEST
     berth_status_t fake = {
         .node_id = (uint8_t)CONFIG_DOCKPULSE_NODE_ID,

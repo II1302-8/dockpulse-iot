@@ -200,7 +200,10 @@ static void on_msg(const char *topic, const char *payload, int len)
 
 esp_err_t dp_gateway_adopt_init(void)
 {
-    dp_gateway_mqtt_set_msg_cb(on_msg);
+    esp_err_t err = dp_gateway_mqtt_add_msg_cb(on_msg);
+    if (err != ESP_OK) {
+        return err;
+    }
     char topic[160];
     snprintf(topic, sizeof(topic), "dockpulse/v1/gw/%s/provision/req", CONFIG_DOCKPULSE_GATEWAY_ID);
     return dp_gateway_mqtt_subscribe(topic, 1);
