@@ -4,6 +4,7 @@ idf_component_register(
         "dp_gateway_wifi.c"
         "dp_gateway_mqtt.c"
         "dp_gateway_adopt.c"
+        "dp_gateway_decom.c"
     INCLUDE_DIRS "include"
     REQUIRES dp_common dp_mesh dp_prov
     PRIV_REQUIRES log esp_event esp_netif esp_wifi mqtt json esp-tls mbedtls

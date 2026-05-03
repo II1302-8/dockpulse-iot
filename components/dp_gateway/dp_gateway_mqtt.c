@@ -25,12 +25,15 @@ static const char *TAG = "dp_gw_mqtt";
 
 #define MQTT_CONNECTED_BIT  BIT0
 #define DP_MAX_PENDING_SUBS 4
+#define DP_MAX_MSG_CBS      4
 
 static esp_mqtt_client_handle_t s_client;
 static EventGroupHandle_t s_mqtt_events;
 
-// _Atomic: read on event task, written from app. no lock on rx
-static _Atomic(dp_gateway_mqtt_msg_cb_t) s_msg_cb;
+// rx fans out, each subsystem registers and filters by topic itself
+// count atomic for lock-free read on event task, append from app side
+static dp_gateway_mqtt_msg_cb_t s_msg_cbs[DP_MAX_MSG_CBS];
+static atomic_int s_msg_cb_count;
 
 // queued subs pre-connect. s_subs_lock guards app + event task both touch
 typedef struct {
@@ -87,15 +90,18 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
         xEventGroupClearBits(s_mqtt_events, MQTT_CONNECTED_BIT);
         break;
     case MQTT_EVENT_DATA: {
-        dp_gateway_mqtt_msg_cb_t cb = atomic_load(&s_msg_cb);
-        if (cb && event && event->topic && event->data) {
-            // event->topic is NOT null-terminated; copy out
-            char topic[160];
-            int tlen = event->topic_len < (int)sizeof(topic) - 1 ? event->topic_len
-                                                                 : (int)sizeof(topic) - 1;
-            memcpy(topic, event->topic, tlen);
-            topic[tlen] = '\0';
-            cb(topic, event->data, event->data_len);
+        if (!event || !event->topic || !event->data) {
+            break;
+        }
+        // event->topic is NOT null-terminated, copy out
+        char topic[160];
+        int tlen =
+            event->topic_len < (int)sizeof(topic) - 1 ? event->topic_len : (int)sizeof(topic) - 1;
+        memcpy(topic, event->topic, tlen);
+        topic[tlen] = '\0';
+        int n = atomic_load(&s_msg_cb_count);
+        for (int i = 0; i < n; i++) {
+            s_msg_cbs[i](topic, event->data, event->data_len);
         }
         break;
     }
@@ -112,9 +118,17 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
-esp_err_t dp_gateway_mqtt_set_msg_cb(dp_gateway_mqtt_msg_cb_t cb)
+esp_err_t dp_gateway_mqtt_add_msg_cb(dp_gateway_mqtt_msg_cb_t cb)
 {
-    atomic_store(&s_msg_cb, cb);
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    int n = atomic_load(&s_msg_cb_count);
+    if (n >= DP_MAX_MSG_CBS) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_msg_cbs[n] = cb;
+    atomic_store(&s_msg_cb_count, n + 1);
     return ESP_OK;
 }
 
