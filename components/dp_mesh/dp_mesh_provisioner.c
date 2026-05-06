@@ -38,6 +38,17 @@ static void cfg_step_advance(uint16_t addr);
 static void prov_finish_ok(uint16_t addr, const uint8_t dev_key[16]);
 static void prov_finish_err(const char *code, const char *msg);
 
+// disarm auto-prov so stale uuid match from previous flow can't fire on
+// a re-beacon outside an active request. zero-len match + prov_after_match=false
+// matches everything but never auto-provisions
+static void clear_dev_uuid_match(void)
+{
+    esp_err_t err = esp_ble_mesh_provisioner_set_dev_uuid_match(NULL, 0, 0, false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "clear uuid match err=%d", err);
+    }
+}
+
 void dp_mesh_provisioner_set_callbacks(dp_mesh_status_handler_t status_cb,
                                        dp_mesh_diag_handler_t diag_cb)
 {
@@ -115,6 +126,14 @@ void dp_mesh_provisioner_handle_prov_event(esp_ble_mesh_prov_cb_event_t event,
         uint16_t addr = param->provisioner_prov_complete.unicast_addr;
         ESP_LOGI(TAG, "prov complete addr=0x%04x node_idx=%u", addr,
                  param->provisioner_prov_complete.node_idx);
+        // orphan complete: stack adopted a beacon outside an active flow
+        // (e.g. stale uuid match never cleared). delete it so it can't
+        // sit on a unicast slot half-configured
+        if (!s_prov_in_flight) {
+            ESP_LOGW(TAG, "orphan prov complete addr=0x%04x, deleting", addr);
+            esp_ble_mesh_provisioner_delete_node_with_addr(addr);
+            break;
+        }
         s_prov_target_addr = addr;
         const esp_ble_mesh_node_t *node = esp_ble_mesh_provisioner_get_node_with_addr(addr);
         if (node) {
@@ -256,6 +275,7 @@ static void prov_finish_ok(uint16_t addr, const uint8_t dev_key[16])
     if (s_prov_timer) {
         esp_timer_stop(s_prov_timer);
     }
+    clear_dev_uuid_match();
     dp_mesh_prov_result_t res = {.ok = true, .unicast_addr = addr};
     memcpy(res.dev_key, dev_key, 16);
     if (s_prov_cb) {
@@ -274,11 +294,23 @@ static void prov_finish_err(const char *code, const char *msg)
     if (s_prov_timer) {
         esp_timer_stop(s_prov_timer);
     }
+    clear_dev_uuid_match();
     dp_mesh_prov_result_t res = {.ok = false, .err_code = code, .err_msg = msg};
     if (s_prov_cb) {
         s_prov_cb(&res, s_prov_ctx);
     }
     s_prov_cb = NULL;
+}
+
+esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr)
+{
+    if (dp_mesh_get_role() != DP_MESH_ROLE_GATEWAY) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!unicast_addr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_ble_mesh_provisioner_delete_node_with_addr(unicast_addr);
 }
 
 // ----- post-init. enable prov, push net/app key, bind, group sub -----

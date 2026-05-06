@@ -47,6 +47,9 @@ typedef void (*dp_mesh_prov_done_cb_t)(const dp_mesh_prov_result_t *res, void *c
 esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *static_oob,
                                     uint32_t timeout_ms, dp_mesh_prov_done_cb_t cb, void *ctx);
 
+// drop node from provisioner table. frees the unicast slot for reuse
+esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr);
+
 #ifdef __cplusplus
 }
 #endif
