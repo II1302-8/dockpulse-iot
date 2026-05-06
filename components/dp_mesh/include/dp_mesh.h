@@ -55,6 +55,12 @@ esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr);
 // scan that's guaranteed to fail (the node won't beacon while provisioned)
 bool dp_mesh_gateway_has_node_with_uuid(const uint8_t uuid[16]);
 
+// fires at each provisioning phase transition so the adopt layer can publish
+// progress over MQTT. state is one of: "started", "link-open", "pb-adv-done",
+// "cfg-app-key", "cfg-bind", "cfg-pub-set", "complete".
+typedef void (*dp_mesh_prov_state_cb_t)(const char *state, void *ctx);
+void dp_mesh_gateway_set_state_cb(dp_mesh_prov_state_cb_t cb, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

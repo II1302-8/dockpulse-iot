@@ -59,6 +59,35 @@ static void publish_resp_ok(const char *req_id, uint16_t addr, const uint8_t dev
     cJSON_free(payload);
 }
 
+static void publish_state(const char *req_id, const char *state)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return;
+    }
+    cJSON_AddStringToObject(root, "req_id", req_id);
+    cJSON_AddStringToObject(root, "state", state);
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload) {
+        return;
+    }
+    char topic[160];
+    snprintf(topic, sizeof(topic), "dockpulse/v1/gw/%s/provision/state",
+             CONFIG_DOCKPULSE_GATEWAY_ID);
+    // QoS 0: progress is advisory, terminal state still arrives via resp
+    dp_gateway_mqtt_publish(topic, payload, 0);
+    cJSON_free(payload);
+}
+
+static void on_prov_state(const char *state, void *ctx)
+{
+    (void)ctx;
+    if (s_inflight.active && state) {
+        publish_state(s_inflight.req_id, state);
+    }
+}
+
 static void publish_resp_err(const char *req_id, const char *code, const char *msg)
 {
     cJSON *root = cJSON_CreateObject();
@@ -214,6 +243,7 @@ esp_err_t dp_gateway_adopt_init(void)
     if (err != ESP_OK) {
         return err;
     }
+    dp_mesh_gateway_set_state_cb(on_prov_state, NULL);
     char topic[160];
     snprintf(topic, sizeof(topic), "dockpulse/v1/gw/%s/provision/req", CONFIG_DOCKPULSE_GATEWAY_ID);
     return dp_gateway_mqtt_subscribe(topic, 1);

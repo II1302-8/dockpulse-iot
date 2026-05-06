@@ -24,6 +24,24 @@ static uint16_t s_prov_target_addr;
 static uint8_t s_prov_dev_key[16];
 static esp_timer_handle_t s_prov_timer;
 
+// state callback fires at phase transitions so the adopt layer can mirror
+// progress on MQTT. always called from mesh-stack threads
+static dp_mesh_prov_state_cb_t s_state_cb;
+static void *s_state_ctx;
+
+static void emit_state(const char *state)
+{
+    if (s_state_cb && s_prov_in_flight) {
+        s_state_cb(state, s_state_ctx);
+    }
+}
+
+void dp_mesh_gateway_set_state_cb(dp_mesh_prov_state_cb_t cb, void *ctx)
+{
+    s_state_cb = cb;
+    s_state_ctx = ctx;
+}
+
 // cfg client step machine for post-PB-ADV configuration
 typedef enum {
     CFG_STEP_IDLE = 0,
@@ -113,6 +131,7 @@ void dp_mesh_provisioner_handle_prov_event(esp_ble_mesh_prov_cb_event_t event,
     }
     case ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT:
         ESP_LOGI(TAG, "prov link open bearer=%d", param->provisioner_prov_link_open.bearer);
+        emit_state("link-open");
         break;
     case ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT:
         ESP_LOGW(TAG, "prov link close bearer=%d reason=%d",
@@ -142,6 +161,7 @@ void dp_mesh_provisioner_handle_prov_event(esp_ble_mesh_prov_cb_event_t event,
             ESP_LOGW(TAG, "node lookup failed for addr=0x%04x", addr);
             memset(s_prov_dev_key, 0, 16);
         }
+        emit_state("pb-adv-done");
         cfg_step_advance(addr);
         break;
     }
@@ -210,6 +230,7 @@ static void cfg_step_advance(uint16_t addr)
     esp_err_t err;
     switch (s_cfg_step) {
     case CFG_STEP_APP_KEY_ADD: {
+        emit_state("cfg-app-key");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.app_key_add.net_idx = DP_NET_IDX;
         set.app_key_add.app_idx = DP_APP_IDX;
@@ -221,6 +242,7 @@ static void cfg_step_advance(uint16_t addr)
         break;
     }
     case CFG_STEP_MODEL_APP_BIND: {
+        emit_state("cfg-bind");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.model_app_bind.element_addr = addr;
         set.model_app_bind.model_app_idx = DP_APP_IDX;
@@ -233,6 +255,7 @@ static void cfg_step_advance(uint16_t addr)
         break;
     }
     case CFG_STEP_MODEL_PUB_SET: {
+        emit_state("cfg-pub-set");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.model_pub_set.element_addr = addr;
         set.model_pub_set.publish_addr = DP_GROUP_ADDR;
@@ -270,6 +293,7 @@ static void prov_finish_ok(uint16_t addr, const uint8_t dev_key[16])
     if (!s_prov_in_flight) {
         return;
     }
+    emit_state("complete");
     s_prov_in_flight = false;
     s_cfg_step = CFG_STEP_IDLE;
     if (s_prov_timer) {
@@ -404,5 +428,6 @@ esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *stati
     }
     ESP_LOGI(TAG, "prov start uuid=%02x%02x%02x... timeout=%" PRIu32 "ms", uuid[0], uuid[1],
              uuid[2], timeout_ms);
+    emit_state("started");
     return ESP_OK;
 }
