@@ -167,6 +167,16 @@ static void handle_provision_req(const char *payload, int len)
         timeout_ms = (uint32_t)ttl_j->valueint * 1000U;
     }
 
+    // pre-check: a node with this UUID is already in our provisioner table.
+    // PB-ADV would scan for an unprov beacon that won't appear (the node
+    // can't beacon while provisioned) and time out after ttl_s. Fail fast
+    // so the harbormaster gets a clear "factory-reset / decommission" hint.
+    if (dp_mesh_gateway_has_node_with_uuid(uuid)) {
+        publish_resp_err(req_id, "already-provisioned", NULL);
+        cJSON_Delete(root);
+        return;
+    }
+
     s_inflight.active = true;
     strncpy(s_inflight.req_id, req_id, sizeof(s_inflight.req_id) - 1);
     s_inflight.req_id[sizeof(s_inflight.req_id) - 1] = '\0';

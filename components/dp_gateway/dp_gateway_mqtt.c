@@ -185,6 +185,8 @@ esp_err_t dp_gateway_mqtt_start_and_wait(void)
         .session.last_will.msg_len = (int)(sizeof(LWT_PAYLOAD) - 1),
         .session.last_will.qos = 1,
         .session.last_will.retain = 1,
+        // carrier NAT drops idle TCP before the IDF default 120s ping fires
+        .session.keepalive = CONFIG_DOCKPULSE_MQTT_KEEPALIVE_S,
     };
     if (CONFIG_DOCKPULSE_MQTT_CLIENT_ID[0] != '\0') {
         cfg.credentials.client_id = CONFIG_DOCKPULSE_MQTT_CLIENT_ID;

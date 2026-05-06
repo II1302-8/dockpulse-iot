@@ -246,13 +246,24 @@ esp_err_t dp_mesh_init(const dp_mesh_cfg_t *cfg)
     } else {
         // gateway pushes matching OOB from backend QR JWT before each
         // flow via set_static_oob_value
-        static const uint8_t SENSOR_STATIC_OOB[16] = {
+        // factory-flashed devices carry a per-device random OOB in
+        // factory_nvs. bench builds (no factory tool ran) fall back to a
+        // shared dev OOB so two-board testing still works without infra
+        static uint8_t s_static_oob[16];
+        static const uint8_t DEV_FALLBACK_OOB[16] = {
             'd', 'p', '-', 's', 't', 'a', 't', 'i', 'c', '-', 'o', 'o', 'b', 0, 0, 0,
         };
+        esp_err_t oob_err = dp_prov_get_static_oob(s_static_oob);
+        if (oob_err == ESP_OK) {
+            ESP_LOGI(TAG, "factory OOB loaded");
+        } else {
+            ESP_LOGW(TAG, "factory OOB unavailable (err=%d), using dev fallback", oob_err);
+            memcpy(s_static_oob, DEV_FALLBACK_OOB, sizeof(s_static_oob));
+        }
         const esp_ble_mesh_prov_t init = {
             .uuid = s_dev_uuid,
-            .static_val = SENSOR_STATIC_OOB,
-            .static_val_len = 16,
+            .static_val = s_static_oob,
+            .static_val_len = sizeof(s_static_oob),
         };
         memcpy(&prov_cfg, &init, sizeof(prov_cfg));
     }

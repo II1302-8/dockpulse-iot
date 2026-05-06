@@ -33,6 +33,12 @@ void dp_prov_factory_reset(void);
 // MAC-derived stable UUID. factory QR encodes the same value
 esp_err_t dp_prov_get_dev_uuid(uint8_t out[DP_PROV_UUID_LEN]);
 
+// per-device static OOB written to factory_nvs by tools/factory-flash.py.
+// returns ESP_ERR_NOT_FOUND if device wasn't factory-flashed (bench builds);
+// caller falls back to a development OOB
+#define DP_PROV_OOB_LEN 16
+esp_err_t dp_prov_get_static_oob(uint8_t out[DP_PROV_OOB_LEN]);
+
 #ifdef __cplusplus
 }
 #endif

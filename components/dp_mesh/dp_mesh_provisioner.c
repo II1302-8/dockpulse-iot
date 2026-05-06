@@ -313,6 +313,14 @@ esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr)
     return esp_ble_mesh_provisioner_delete_node_with_addr(unicast_addr);
 }
 
+bool dp_mesh_gateway_has_node_with_uuid(const uint8_t uuid[16])
+{
+    if (dp_mesh_get_role() != DP_MESH_ROLE_GATEWAY || !uuid) {
+        return false;
+    }
+    return esp_ble_mesh_provisioner_get_node_with_uuid(uuid) != NULL;
+}
+
 // ----- post-init. enable prov, push net/app key, bind, group sub -----
 
 esp_err_t dp_mesh_provisioner_post_init(void)

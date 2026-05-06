@@ -13,6 +13,12 @@ static const char *TAG = "dp_prov";
 #define NVS_NAMESPACE "dp_prov"
 #define NVS_TABLE_KEY "berths"
 
+// factory partition is mutually exclusive from the default nvs partition
+// so factory_reset's nvs_flash_erase() does not wipe per-device claim data
+#define FACTORY_NVS_PART  "factory_nvs"
+#define FACTORY_NAMESPACE "factory"
+#define FACTORY_KEY_OOB   "oob"
+
 #define DP_PROV_MAX_RECORDS 16
 
 typedef struct {
@@ -184,6 +190,40 @@ void dp_prov_factory_reset(void)
     // wipes BLE Mesh stack NVS too (lives in same partition under bt_mesh* namespaces)
     nvs_flash_erase();
     esp_restart();
+}
+
+esp_err_t dp_prov_get_static_oob(uint8_t out[DP_PROV_OOB_LEN])
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    // partition init is idempotent. fails NOT_FOUND if factory tool never ran
+    esp_err_t err = nvs_flash_init_partition(FACTORY_NVS_PART);
+    if (err == ESP_ERR_NOT_FOUND) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (err != ESP_OK && err != ESP_ERR_NVS_NO_FREE_PAGES &&
+        err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        return err;
+    }
+    nvs_handle_t h;
+    err = nvs_open_from_partition(FACTORY_NVS_PART, FACTORY_NAMESPACE, NVS_READONLY, &h);
+    if (err != ESP_OK) {
+        return err == ESP_ERR_NVS_NOT_FOUND ? ESP_ERR_NOT_FOUND : err;
+    }
+    size_t sz = DP_PROV_OOB_LEN;
+    err = nvs_get_blob(h, FACTORY_KEY_OOB, out, &sz);
+    nvs_close(h);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (sz != DP_PROV_OOB_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
 }
 
 esp_err_t dp_prov_get_dev_uuid(uint8_t out[DP_PROV_UUID_LEN])

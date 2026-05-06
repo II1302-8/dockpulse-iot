@@ -40,9 +40,16 @@ CONFIG_BLE_MESH_RX_SEG_MSG_COUNT=10
 # repower).
 CONFIG_BLE_MESH_SETTINGS=y
 
-# Logging
+# Logging — keep app default at INFO (USB-Serial-JTAG drops bytes when
+# no host attached, so verbose logs don't stall the publish loop).
+# Bootloader to WARNING to shave ~80ms off cold boot and silence the
+# header dump that's noise once a fleet is in the field.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+# silence the ROM bootloader's UART chatter on every reset / wake
+# CONFIG_BOOT_ROM_LOG_ALWAYS_ON is not set
+CONFIG_BOOT_ROM_LOG_ALWAYS_OFF=y
 
 # Route the console to USB-Serial-JTAG instead of UART0. UART0's TX
 # FIFO blocks the writer task when no host is reading; the sensor's
@@ -75,3 +82,47 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # Compiler
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+
+# Production hardening. Kept here (not in per-role sdkconfig) so every
+# build that consumes sdkconfig.defaults inherits them.
+#
+# auto-reboot on panic — unattended devices in the field can't be
+# manually power-cycled. paired with TASK/INT/BOOTLOADER WDTs and
+# stack-canary checks already on by default
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
+# brownout detector at LVL 7 (~2.51V) — sensor on solar can dip below
+# rail voltage during a cloud transient; reset is safer than corrupt NVS
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
+CONFIG_ESP_BROWNOUT_DET_LVL=7
+# stack canary catches FreeRTOS task overflows before they corrupt heap
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+# task watchdog 5s — long enough for slow MQTT TLS handshakes,
+# short enough to recover from a wedged radar UART read
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+# disable debug surfaces in prod images. ESP_GDBSTUB_ENABLED is a
+# hidden default-y option that only adds the panic-handler register
+# dump — fine to keep. the user-visible runtime gdb stub
+# (ESP_SYSTEM_GDBSTUB_RUNTIME) and OCDAWARE are what we don't want
+# CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME is not set
+# CONFIG_ESP_DEBUG_OCDAWARE is not set
+# skip image SHA validation when waking from deep sleep — the image
+# can't change between sleep/wake, and validation costs ~80ms of solar
+# budget per wake. matters once dp_sensor moves to deep sleep
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+# heap poisoning off — the runtime cost (~10% on alloc/free) doesn't
+# pay off in a steady-state firmware that allocates almost nothing
+# after init
+CONFIG_HEAP_POISONING_DISABLED=y
+# coredump to flash needs a coredump partition. partitions.csv doesn't
+# have one yet — flip on once the layout adds it. for now, a panic
+# triggers PANIC_PRINT_REBOOT and the trace lands in USB-Serial-JTAG
+# tools/monitor.sh output
+# CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH is not set
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y

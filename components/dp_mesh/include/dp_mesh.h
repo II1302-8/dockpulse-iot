@@ -50,6 +50,11 @@ esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *stati
 // drop node from provisioner table. frees the unicast slot for reuse
 esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr);
 
+// true if the gateway already provisioned a node with this UUID. used to
+// short-circuit re-adoption with code=already-provisioned instead of a 180s
+// scan that's guaranteed to fail (the node won't beacon while provisioned)
+bool dp_mesh_gateway_has_node_with_uuid(const uint8_t uuid[16]);
+
 #ifdef __cplusplus
 }
 #endif

@@ -229,6 +229,17 @@ menu "DockPulse"
             depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
             default ""
 
+        config DOCKPULSE_MQTT_KEEPALIVE_S
+            int "MQTT keepalive (seconds)"
+            depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
+            range 10 600
+            default 30
+            help
+                ESP-IDF defaults to 120s; carrier NAT typically drops idle
+                TCP at 60-90s so the keepalive ping never gets sent. 30s is
+                low enough to survive most NATs while keeping idle traffic
+                modest. Bump for stable wired uplinks if log volume matters.
+
         config DOCKPULSE_MQTT_SELFTEST
             bool "Publish a synthetic sample after broker connect"
             depends on !DOCKPULSE_GATEWAY_UPLINK_STUB
