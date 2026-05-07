@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 
 #include "dp_mesh_priv.h"
+#include "dp_prov.h"
 
 static const char *TAG = "dp_mesh_prov";
 
@@ -52,7 +53,14 @@ typedef enum {
 } cfg_step_t;
 static cfg_step_t s_cfg_step;
 
+// 1 initial + 2 retries per step. transient cfg-phase packet loss had
+// been dooming adoptions where the node would have reapplied on retry
+#define CFG_MAX_ATTEMPTS 3
+static int s_cfg_attempts;
+
 static void cfg_step_advance(uint16_t addr);
+static void cfg_step_redo(uint16_t addr);
+static esp_err_t cfg_do_current_step(uint16_t addr);
 static void prov_finish_ok(uint16_t addr, const uint8_t dev_key[16]);
 static void prov_finish_err(const char *code, const char *msg);
 
@@ -84,13 +92,25 @@ static void on_cfg_client(esp_ble_mesh_cfg_client_cb_event_t event,
     }
     int err = param->error_code;
     uint32_t op = param->params ? param->params->opcode : 0;
-    ESP_LOGI(TAG, "cfg cli evt=%d op=0x%04" PRIx32 " err=%d", (int)event, op, err);
-    if (event == ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT || err != 0) {
+    ESP_LOGI(TAG, "cfg cli evt=%d op=0x%04" PRIx32 " err=%d step=%d att=%d", (int)event, op, err,
+             (int)s_cfg_step, s_cfg_attempts);
+    if (event == ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT) {
+        // not a response to our cmd
+        return;
+    }
+    if (event == ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT) {
+        // transient loss retry, err!=0 path below stays terminal
+        if (s_cfg_attempts < CFG_MAX_ATTEMPTS) {
+            ESP_LOGW(TAG, "cfg timeout step=%d att=%d, retry", (int)s_cfg_step, s_cfg_attempts);
+            cfg_step_redo(s_prov_target_addr);
+            return;
+        }
         prov_finish_err("cfg-fail", NULL);
         return;
     }
-    if (event == ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT) {
-        // ignore not response to our cmd
+    if (err != 0) {
+        // semantic error from node, not transient
+        prov_finish_err("cfg-fail", NULL);
         return;
     }
     cfg_step_advance(s_prov_target_addr);
@@ -219,43 +239,32 @@ static esp_err_t cfg_send(uint16_t addr, uint32_t opcode, esp_ble_mesh_cfg_clien
                 .addr = addr,
                 .send_ttl = 7,
             },
-        .msg_timeout = 5000,
+        // 8000ms tolerates slow first response after PB-ADV, retries gated separately
+        .msg_timeout = 8000,
     };
     return esp_ble_mesh_config_client_set_state(&common, set);
 }
 
-static void cfg_step_advance(uint16_t addr)
+// caller manages step counter + attempts, this only sends
+static esp_err_t cfg_do_current_step(uint16_t addr)
 {
-    s_cfg_step++;
-    esp_err_t err;
     switch (s_cfg_step) {
     case CFG_STEP_APP_KEY_ADD: {
-        emit_state("cfg-app-key");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.app_key_add.net_idx = DP_NET_IDX;
         set.app_key_add.app_idx = DP_APP_IDX;
         memcpy(set.app_key_add.app_key, DP_APP_KEY, 16);
-        err = cfg_send(addr, ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD, &set);
-        if (err != ESP_OK) {
-            prov_finish_err("appkey-send", NULL);
-        }
-        break;
+        return cfg_send(addr, ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD, &set);
     }
     case CFG_STEP_MODEL_APP_BIND: {
-        emit_state("cfg-bind");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.model_app_bind.element_addr = addr;
         set.model_app_bind.model_app_idx = DP_APP_IDX;
         set.model_app_bind.model_id = DP_VND_MODEL_ID;
         set.model_app_bind.company_id = DP_CID;
-        err = cfg_send(addr, ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND, &set);
-        if (err != ESP_OK) {
-            prov_finish_err("bind-send", NULL);
-        }
-        break;
+        return cfg_send(addr, ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND, &set);
     }
     case CFG_STEP_MODEL_PUB_SET: {
-        emit_state("cfg-pub-set");
         esp_ble_mesh_cfg_client_set_state_t set = {0};
         set.model_pub_set.element_addr = addr;
         set.model_pub_set.publish_addr = DP_GROUP_ADDR;
@@ -265,17 +274,65 @@ static void cfg_step_advance(uint16_t addr)
         set.model_pub_set.publish_retransmit = ESP_BLE_MESH_PUBLISH_TRANSMIT(1, 50);
         set.model_pub_set.model_id = DP_VND_MODEL_ID;
         set.model_pub_set.company_id = DP_CID;
-        err = cfg_send(addr, ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET, &set);
-        if (err != ESP_OK) {
+        return cfg_send(addr, ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET, &set);
+    }
+    default:
+        return ESP_ERR_INVALID_STATE;
+    }
+}
+
+static void cfg_step_advance(uint16_t addr)
+{
+    s_cfg_step++;
+    s_cfg_attempts = 1;
+    switch (s_cfg_step) {
+    case CFG_STEP_APP_KEY_ADD:
+        emit_state("cfg-app-key");
+        if (cfg_do_current_step(addr) != ESP_OK) {
+            prov_finish_err("appkey-send", NULL);
+        }
+        break;
+    case CFG_STEP_MODEL_APP_BIND:
+        emit_state("cfg-bind");
+        if (cfg_do_current_step(addr) != ESP_OK) {
+            prov_finish_err("bind-send", NULL);
+        }
+        break;
+    case CFG_STEP_MODEL_PUB_SET:
+        emit_state("cfg-pub-set");
+        if (cfg_do_current_step(addr) != ESP_OK) {
             prov_finish_err("pubset-send", NULL);
         }
         break;
-    }
     case CFG_STEP_DONE:
         prov_finish_ok(addr, s_prov_dev_key);
         break;
     default:
         break;
+    }
+}
+
+// re-send current step without advancing s_cfg_step
+static void cfg_step_redo(uint16_t addr)
+{
+    s_cfg_attempts++;
+    if (cfg_do_current_step(addr) != ESP_OK) {
+        // map send-side failure to per-step code so backend can disambiguate
+        const char *code = "cfg-fail";
+        switch (s_cfg_step) {
+        case CFG_STEP_APP_KEY_ADD:
+            code = "appkey-send";
+            break;
+        case CFG_STEP_MODEL_APP_BIND:
+            code = "bind-send";
+            break;
+        case CFG_STEP_MODEL_PUB_SET:
+            code = "pubset-send";
+            break;
+        default:
+            break;
+        }
+        prov_finish_err(code, NULL);
     }
 }
 
@@ -308,16 +365,51 @@ static void prov_finish_ok(uint16_t addr, const uint8_t dev_key[16])
     s_prov_cb = NULL;
 }
 
+// best-effort, node may not respond, local cleanup is what unblocks retries
+static void send_node_reset(uint16_t addr)
+{
+    esp_ble_mesh_cfg_client_set_state_t set = {0};
+    esp_ble_mesh_client_common_param_t common = {
+        .opcode = ESP_BLE_MESH_MODEL_OP_NODE_RESET,
+        .model = &root_models_gateway[1],
+        .ctx =
+            {
+                .net_idx = DP_NET_IDX,
+                .app_idx = ESP_BLE_MESH_KEY_UNUSED,
+                .addr = addr,
+                .send_ttl = 7,
+            },
+        .msg_timeout = 1000,
+    };
+    esp_err_t err = esp_ble_mesh_config_client_set_state(&common, &set);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "node-reset send addr=0x%04x err=%d", addr, err);
+    }
+}
+
 static void prov_finish_err(const char *code, const char *msg)
 {
     if (!s_prov_in_flight) {
         return;
     }
+    uint16_t target = s_prov_target_addr;
+    // flag flip first gates on_cfg_client early-return for any cfg send below
     s_prov_in_flight = false;
     s_cfg_step = CFG_STEP_IDLE;
     if (s_prov_timer) {
         esp_timer_stop(s_prov_timer);
     }
+    if (target) {
+        // send reset while dev key still in DB, then drop the node so the
+        // unicast slot frees and next adoption skips the already-prov check
+        send_node_reset(target);
+        esp_err_t d = esp_ble_mesh_provisioner_delete_node_with_addr(target);
+        if (d != ESP_OK) {
+            ESP_LOGW(TAG, "delete node addr=0x%04x err=%d", target, d);
+        }
+        dp_prov_forget_unicast(target);
+    }
+    s_prov_target_addr = 0;
     clear_dev_uuid_match();
     dp_mesh_prov_result_t res = {.ok = false, .err_code = code, .err_msg = msg};
     if (s_prov_cb) {
@@ -400,6 +492,7 @@ esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *stati
     memcpy(s_prov_uuid, uuid, 16);
     s_prov_target_addr = 0;
     s_cfg_step = CFG_STEP_IDLE;
+    s_cfg_attempts = 0;
 
     if (static_oob) {
         esp_err_t err = esp_ble_mesh_provisioner_set_static_oob_value(static_oob, 16);

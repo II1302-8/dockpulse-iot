@@ -5,8 +5,10 @@
 #include "esp_ble_mesh_local_data_operation_api.h"
 #include "esp_ble_mesh_networking_api.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "dp_mesh_priv.h"
+#include "dp_prov.h"
 
 static const char *TAG = "dp_mesh_sensor";
 
@@ -14,6 +16,48 @@ static dp_mesh_status_handler_t s_status_cb;
 static dp_mesh_diag_handler_t s_diag_cb;
 static dp_mesh_sensor_ready_cb_t s_ready_cb;
 static bool s_ready_fired;
+
+// armed at PB-ADV done, disarmed at PubSet, expiry means cfg never finished
+// so factory-reset avoids sitting half-configured forever
+#define POST_PROV_WATCHDOG_US (90ULL * 1000 * 1000)
+static esp_timer_handle_t s_post_prov_timer;
+
+static void post_prov_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_ready_fired) {
+        return;
+    }
+    ESP_LOGW(TAG, "post-prov watchdog: cfg never completed, resetting node");
+    esp_err_t err = esp_ble_mesh_node_local_reset();
+    if (err != ESP_OK) {
+        // last resort if local_reset failed
+        ESP_LOGW(TAG, "node_local_reset err=%d, factory-reset", err);
+        dp_prov_factory_reset();
+    }
+}
+
+static void arm_post_prov_watchdog(void)
+{
+    if (!s_post_prov_timer) {
+        const esp_timer_create_args_t a = {
+            .callback = post_prov_timer_cb,
+            .name = "dp_post_prov_to",
+        };
+        if (esp_timer_create(&a, &s_post_prov_timer) != ESP_OK) {
+            return;
+        }
+    }
+    esp_timer_stop(s_post_prov_timer);
+    esp_timer_start_once(s_post_prov_timer, POST_PROV_WATCHDOG_US);
+}
+
+static void disarm_post_prov_watchdog(void)
+{
+    if (s_post_prov_timer) {
+        esp_timer_stop(s_post_prov_timer);
+    }
+}
 
 void dp_mesh_sensor_set_callbacks(dp_mesh_status_handler_t status_cb,
                                   dp_mesh_diag_handler_t diag_cb,
@@ -32,6 +76,7 @@ void dp_mesh_sensor_fire_ready(void)
     uint16_t addr = esp_ble_mesh_get_primary_element_address();
     dp_mesh_internal_arm_sensor_pub();
     s_ready_fired = true;
+    disarm_post_prov_watchdog();
     ESP_LOGI(TAG, "sensor ready addr=0x%04x", addr);
     if (s_ready_cb) {
         s_ready_cb(addr);
@@ -56,10 +101,14 @@ void dp_mesh_sensor_handle_prov_event(esp_ble_mesh_prov_cb_event_t event,
         ESP_LOGI(TAG, "node prov complete addr=0x%04x net_idx=0x%04x iv=0x%08" PRIx32,
                  param->node_prov_complete.addr, param->node_prov_complete.net_idx,
                  param->node_prov_complete.iv_index);
-        // wait for AppKey Add + Model App Bind via cfg server below
+        // wait for AppKey Add + Model App Bind + Pub Set via cfg server below
+        // watchdog catches interrupted cfg phases that would leave us half-set
+        arm_post_prov_watchdog();
         break;
     case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
-        ESP_LOGW(TAG, "node prov reset");
+        ESP_LOGW(TAG, "node prov reset, factory wiping");
+        // no-return on success
+        dp_prov_factory_reset();
         break;
     default:
         ESP_LOGD(TAG, "node prov evt %d", (int)event);
@@ -76,8 +125,9 @@ void dp_mesh_sensor_on_cfg_server(esp_ble_mesh_cfg_server_cb_event_t event,
     }
     uint32_t op = param->ctx.recv_op;
     ESP_LOGI(TAG, "cfg srv state-change op=0x%04" PRIx32, op);
-    if (op == ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND || op == ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET) {
-        // bind or pub-set received vendor model can publish
+    // PubSet only, Bind alone leaves publish_addr unset so model can't
+    // publish to the group, firing on bind looked ready but dropped traffic
+    if (op == ESP_BLE_MESH_MODEL_OP_MODEL_PUB_SET) {
         dp_mesh_sensor_fire_ready();
     }
 }

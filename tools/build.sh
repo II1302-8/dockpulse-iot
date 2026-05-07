@@ -18,8 +18,6 @@
 # partition table regen, saves ~3s on incremental builds. Use after
 # the first full build for the role.
 
-print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
-
 cd "$(dirname "$0")/.."
 . tools/_common.sh
 
@@ -29,26 +27,8 @@ activate_idf
 BUILD_DIR="$(build_dir_for "$ROLE")"
 SDKCONFIG="$(sdkconfig_for "$ROLE")"
 
-# Build a one-shot Kconfig override capturing the runtime knobs the
-# user passed in. This file is consumed by SDKCONFIG_DEFAULTS only the
-# first time the build dir is created — once sdkconfig exists it sticks.
-OVERRIDE="$(mktemp -t dp_build_XXXX.cfg)"
+OVERRIDE="$(write_kconfig_override "$ROLE" "$NODE_ID" "$FAKE_RADAR")"
 trap 'rm -f "$OVERRIDE"' EXIT
-
-case "$ROLE" in
-    gateway) echo "CONFIG_DOCKPULSE_ROLE_GATEWAY=y" >>"$OVERRIDE" ;;
-    sensor)  echo "CONFIG_DOCKPULSE_ROLE_SENSOR=y"  >>"$OVERRIDE" ;;
-esac
-if [[ -n "$NODE_ID" ]]; then
-    echo "CONFIG_DOCKPULSE_NODE_ID=$NODE_ID" >>"$OVERRIDE"
-fi
-if [[ "$ROLE" == "sensor" && -n "$FAKE_RADAR" ]]; then
-    if [[ "$FAKE_RADAR" == y ]]; then
-        echo "CONFIG_DOCKPULSE_RADAR_FAKE=y" >>"$OVERRIDE"
-    else
-        echo "# CONFIG_DOCKPULSE_RADAR_FAKE is not set" >>"$OVERRIDE"
-    fi
-fi
 
 TARGET=${APP_ONLY:+app}
 TARGET=${TARGET:-build}

@@ -113,6 +113,8 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
     }
     snprintf(node_id, sizeof(node_id), "node-%03u", s->node_id);
     now_iso8601(ts_iso, sizeof(ts_iso));
+    char unicast_addr[8];
+    snprintf(unicast_addr, sizeof(unicast_addr), "0x%04x", src_addr);
 
     // Topic format per docs/api/mqtt-contract.yml in the dockpulse repo:
     //   harbor/{harbor_id}/{dock_id}/{berth_id}/status
@@ -128,6 +130,9 @@ esp_err_t dp_gateway_uplink(const berth_status_t *s, uint16_t src_addr)
         return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(root, "node_id", node_id);
     cJSON_AddStringToObject(root, "berth_id", berth_id);
+    // backend uses this to reject rogue nodes publishing to a berth they
+    // aren't bound to (cross-check against the registered Node row)
+    cJSON_AddStringToObject(root, "mesh_unicast_addr", unicast_addr);
     cJSON_AddBoolToObject(root, "occupied", s->occupied);
     cJSON_AddNumberToObject(root, "sensor_raw", s->sensor_raw_mm);
     if (s->battery_pct != DP_BATTERY_UNKNOWN) {
@@ -170,6 +175,8 @@ esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
     }
     snprintf(node_id, sizeof(node_id), "node-%03u", d->node_id);
     now_iso8601(ts_iso, sizeof(ts_iso));
+    char unicast_addr[8];
+    snprintf(unicast_addr, sizeof(unicast_addr), "0x%04x", src_addr);
 
     char topic[192];
     snprintf(topic, sizeof(topic), "harbor/%s/%s/%s/diag", CONFIG_DOCKPULSE_HARBOR_ID,
@@ -180,6 +187,7 @@ esp_err_t dp_gateway_uplink_diag(const berth_diag_t *d, uint16_t src_addr)
         return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(root, "node_id", node_id);
     cJSON_AddStringToObject(root, "berth_id", berth_id);
+    cJSON_AddStringToObject(root, "mesh_unicast_addr", unicast_addr);
     cJSON_AddNumberToObject(root, "target_state", d->target_state);
     cJSON_AddNumberToObject(root, "raw_distance_cm", d->raw_distance_cm);
 

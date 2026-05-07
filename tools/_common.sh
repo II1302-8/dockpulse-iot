@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# prints the leading comment block of the calling script.
+# format: lines start with "# " or "#", first blank "#" line ends the block
+print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+
 # Reconcile the existing sdkconfig in BUILD_DIR with the requested
 # role/node_id/fake-radar flags. SDKCONFIG_DEFAULTS only takes effect
 # on first config — so once a build dir exists we have to mutate
@@ -99,15 +103,20 @@ sdkconfig_for() {
     esac
 }
 
-# First /dev/cu.usbmodem* device, or empty if none. Note: with multiple
-# boards plugged in, this is non-deterministic — pass --port explicitly.
+# first usb-serial device on macOS or Linux, empty if none.
+# non-deterministic with multiple boards, pass --port explicitly.
+# patterns mirror list-ports.sh
 default_port() {
-    ls /dev/cu.usbmodem* 2>/dev/null | head -n1 || true
+    for p in /dev/cu.usbmodem* /dev/ttyACM* /dev/ttyUSB*; do
+        [[ -e "$p" ]] && { echo "$p"; return 0; }
+    done
+    # explicit return 0 keeps $(default_port) from tripping set -e on no match
+    return 0
 }
 
 require_port() {
     if [[ -z "${1:-}" ]]; then
-        echo "No /dev/cu.usbmodem* device found. Plug in a board or pass --port." >&2
+        echo "No USB-serial device found. Plug in a board or pass --port." >&2
         echo "Hint: tools/list-ports.sh shows attached boards." >&2
         exit 1
     fi
@@ -131,7 +140,12 @@ parse_args() {
     REST=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -r|--role)      ROLE="$2"; shift 2 ;;
+            -r|--role)
+                case "$2" in
+                    gateway|sensor) ROLE="$2" ;;
+                    *) echo "invalid --role: '$2' (expected gateway or sensor)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
             -p|--port)      PORT="$2"; shift 2 ;;
             -n|--node-id)   NODE_ID="$2"; shift 2 ;;
             --fake)         FAKE_RADAR=y; shift ;;
@@ -146,4 +160,29 @@ parse_args() {
     if [[ -z "$PORT" ]]; then
         PORT="$(default_port)"
     fi
+}
+
+# write per-invocation Kconfig override file with role/node-id/fake flags.
+# only takes effect on first config via SDKCONFIG_DEFAULTS, subsequent runs
+# rely on sync_sdkconfig mutating the existing sdkconfig.
+# echoes path so caller can pass to idf.py and clean up via trap
+write_kconfig_override() {
+    local role="$1" node_id="$2" fake="$3"
+    local f
+    f="$(mktemp -t dp_kconfig_XXXX.cfg)"
+    case "$role" in
+        gateway) echo "CONFIG_DOCKPULSE_ROLE_GATEWAY=y" >>"$f" ;;
+        sensor)  echo "CONFIG_DOCKPULSE_ROLE_SENSOR=y"  >>"$f" ;;
+    esac
+    if [[ -n "$node_id" ]]; then
+        echo "CONFIG_DOCKPULSE_NODE_ID=$node_id" >>"$f"
+    fi
+    if [[ "$role" == "sensor" && -n "$fake" ]]; then
+        if [[ "$fake" == y ]]; then
+            echo "CONFIG_DOCKPULSE_RADAR_FAKE=y" >>"$f"
+        else
+            echo "# CONFIG_DOCKPULSE_RADAR_FAKE is not set" >>"$f"
+        fi
+    fi
+    echo "$f"
 }

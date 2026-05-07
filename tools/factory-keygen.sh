@@ -29,6 +29,17 @@ if [[ -e "$PRIV" && -z "$FORCE" ]]; then
 fi
 
 mkdir -p "$(dirname "$PRIV")"
+
+# belt-and-braces if a future contributor moves factory/private/ out from
+# under .gitignore, ask git directly
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+    if ! git check-ignore -q "$PRIV"; then
+        echo "refusing to write $PRIV: not in .gitignore (would be committed)." >&2
+        echo "add factory/private/ to .gitignore first." >&2
+        exit 1
+    fi
+fi
+
 openssl genpkey -algorithm Ed25519 -out "$PRIV"
 chmod 600 "$PRIV"
 openssl pkey -in "$PRIV" -pubout -out "$PUB"

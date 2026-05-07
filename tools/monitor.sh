@@ -2,24 +2,36 @@
 # Open serial monitor on a port. No build dir needed — pure UART tap.
 #
 # Usage:
-#   tools/monitor.sh [-p PORT] [-r gateway|sensor]
+#   tools/monitor.sh -r gateway|sensor [-p PORT]
 #
-# --role only matters if you want symbol decoding from the elf in the
-# corresponding build dir. Without --role, falls back to the default
-# build/.
+# -r/--role is required so symbol decoding picks the matching elf. Picking
+# the wrong elf turns panic backtraces into nonsense.
 # Exit the monitor with Ctrl-].
-
-print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cd "$(dirname "$0")/.."
 . tools/_common.sh
 
+# detect explicit -r/--role before parse_args sets the default
+USER_PROVIDED_ROLE=""
+for arg in "$@"; do
+    case "$arg" in -r|--role) USER_PROVIDED_ROLE=y ;; esac
+done
+
 parse_args "$@"
+if [[ -z "$USER_PROVIDED_ROLE" ]]; then
+    echo "monitor.sh requires -r gateway|sensor (so symbol decoding uses the right elf)." >&2
+    exit 1
+fi
 activate_idf
 require_port "$PORT"
 
 BUILD_DIR="$(build_dir_for "$ROLE")"
 SDKCONFIG="$(sdkconfig_for "$ROLE")"
+
+if [[ ! -d "$BUILD_DIR" ]]; then
+    echo "$BUILD_DIR does not exist. Run tools/build.sh -r $ROLE first." >&2
+    exit 1
+fi
 
 echo "Monitor role=$ROLE port=$PORT dir=$BUILD_DIR (Ctrl-] to exit)"
 

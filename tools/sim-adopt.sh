@@ -4,7 +4,7 @@
 #
 # usage:
 #   tools/sim-adopt.sh -m AABBCCDDEEFF -b ksss-saltsjobaden-pier-1-t1
-#   tools/sim-adopt.sh -u <full-32-hex-uuid> -g gw-001 -h 127.0.0.1
+#   tools/sim-adopt.sh -u <full-32-hex-uuid> -g gw-001 --host 127.0.0.1
 #
 # MAC or full UUID comes from sensor boot log line:
 #   I (1234) dp_mesh: ready role=sensor uuid=aabbccddeeff444f434b50554c534501
@@ -14,14 +14,26 @@ set -euo pipefail
 
 print_help() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
+# fail before publish if mosquitto-clients missing
+for bin in mosquitto_pub mosquitto_sub; do
+    command -v "$bin" >/dev/null || {
+        echo "missing $bin — install mosquitto-clients (brew install mosquitto / apt install mosquitto-clients)" >&2
+        exit 1
+    }
+done
+
 MAC=""
 BERTH=""
 GW_ID="gw-001"
 HOST="127.0.0.1"
 PORT="1883"
 REQ_ID="bench-$(date +%s)"
-TTL_S=60
-# placeholder OOB from dp_mesh.c must match gateway set_static_oob_value
+# matches backend ADOPTION_TTL, with cfg-client retries (3 attempts x 8s
+# x 3 steps = up to 72s) 60s wasn't enough under packet loss
+TTL_S=180
+# dev placeholder OOB from dp_mesh.c, matches gateway set_static_oob_value.
+# real factory-flashed boards have a per-device OOB in factory_nvs, this
+# tool will fail with bad-oob against those
 OOB_HEX="64702d7374617469632d6f6f62000000"
 
 while [[ $# -gt 0 ]]; do
@@ -29,12 +41,12 @@ while [[ $# -gt 0 ]]; do
         -m|--mac|-u|--uuid) MAC="$2"; shift 2 ;;
         -b|--berth)         BERTH="$2"; shift 2 ;;
         -g|--gateway-id)    GW_ID="$2"; shift 2 ;;
-        -h|--host)          HOST="$2"; shift 2 ;;
+        --host)             HOST="$2"; shift 2 ;;
         --port)             PORT="$2"; shift 2 ;;
         --req-id)           REQ_ID="$2"; shift 2 ;;
         --ttl)              TTL_S="$2"; shift 2 ;;
         --oob)              OOB_HEX="$2"; shift 2 ;;
-        --help)             print_help; exit 0 ;;
+        -h|--help)          print_help; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done

@@ -35,10 +35,19 @@ import time
 import uuid as _uuid
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+# share helpers with verify-device.py and print-qr.py
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from factory_flash_helpers import (  # noqa: E402
+    EXPIRY_WARN_DAYS,
+    activate_idf,
+    compose_uuid,
+    days_until,
+    default_port,
+    fail,
+    read_mac,
+)
 
-# matches the marker dp_prov_get_dev_uuid appends after the 6-byte MAC
-MARKER_HEX = b"DOCKPULSE".hex() + "01"
+REPO = Path(__file__).resolve().parent.parent
 
 # factory_nvs partition. keep in sync with partitions.csv
 FACTORY_NVS_OFFSET = 0x200000
@@ -54,85 +63,52 @@ APP_FLASH_OFFSETS = {
 }
 
 
-def fail(msg: str, code: int = 1) -> None:
-    sys.stderr.write(f"factory-flash: {msg}\n")
-    sys.exit(code)
-
-
 def b64u(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-def activate_idf() -> None:
-    # nvs_partition_gen.py lives under $IDF_PATH, so even if esptool.py is
-    # already on the path we still need the env populated. running export.sh
-    # is idempotent
-    if os.environ.get("IDF_PATH") and shutil.which("esptool.py"):
+def assert_path_gitignored(path: Path, what: str) -> None:
+    """Refuse to read/write secrets at a path git wouldn't ignore.
+
+    Belt-and-braces: the repo ships a .gitignore for factory/private/ and
+    factory/devices/ but a future contributor might rearrange paths. Run
+    from a git checkout and ask git directly — the source of truth.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "check-ignore", "-q", str(path)],
+            cwd=REPO,
+            check=False,
+        )
+    except FileNotFoundError:
+        # not a git checkout (zip download, etc), let the user decide
+        sys.stderr.write(
+            f"factory-flash: warning, git not available, can't verify "
+            f"{path} is gitignored\n"
+        )
         return
-    idf_path = os.environ.get("IDF_PATH") or str(Path.home() / "esp/esp-idf")
-    export_sh = Path(idf_path) / "export.sh"
-    if not export_sh.is_file():
-        fail(f"ESP-IDF not found at {idf_path}. Set IDF_PATH or install per CONTRIBUTING.md.")
-    out = subprocess.run(
-        ["bash", "-c", f". {export_sh} >/dev/null && env"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    for line in out.stdout.splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            os.environ[k] = v
+    if out.returncode != 0:
+        fail(
+            f"refusing to use {what} at {path}: not in .gitignore "
+            "(would be committed on next git add). Add the parent dir to "
+            ".gitignore first."
+        )
 
 
-def default_port() -> str | None:
-    candidates = sorted(Path("/dev").glob("cu.usbmodem*"))
-    return str(candidates[0]) if candidates else None
-
-
-def read_mac(port: str) -> bytes:
-    out = subprocess.run(
-        [
-            "esptool.py",
-            "--chip",
-            "esp32c3",
-            "--port",
-            port,
-            "--before",
-            "default_reset",
-            "--after",
-            "hard_reset",
-            "read_mac",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    for line in out.stdout.splitlines():
-        # "MAC: aa:bb:cc:dd:ee:ff"
-        if line.startswith("MAC:"):
-            mac_str = line.split(":", 1)[1].strip()
-            return bytes.fromhex(mac_str.replace(":", ""))
-    fail(f"could not parse MAC from esptool output:\n{out.stdout}")
-    return b""  # unreachable
-
-
-def compose_uuid(mac: bytes) -> str:
-    if len(mac) != 6:
-        fail(f"expected 6-byte MAC, got {len(mac)}")
-    return mac.hex() + MARKER_HEX
-
-
-def sign_claim(uuid_hex: str, serial: str, exp_days: int, priv_pem: bytes) -> tuple[str, dict]:
+def sign_claim(
+    uuid_hex: str, oob_hex: str, serial: str, exp_days: int, priv_pem: bytes
+) -> tuple[str, dict]:
     # avoid pyjwt dep — IDF's pyenv already has cryptography
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     priv = load_pem_private_key(priv_pem, password=None)
     now = int(time.time())
+    # both uuid and oob in the signed payload, tampering invalidates sig
     claim = {
         "iss": "factory",
         "sub": serial,
         "uuid": uuid_hex,
+        "oob": oob_hex,
         "jti": str(_uuid.uuid4()),
         "iat": now,
         "exp": now + exp_days * 86400,
@@ -145,14 +121,10 @@ def sign_claim(uuid_hex: str, serial: str, exp_days: int, priv_pem: bytes) -> tu
     return f"{h}.{p}.{b64u(signature)}", claim
 
 
-def build_qr_payload(uuid_hex: str, oob_hex: str, serial: str, jwt_token: str) -> str:
-    qr = {
-        "v": 1,
-        "uuid": uuid_hex,
-        "oob": oob_hex,
-        "sn": serial,
-        "jwt": jwt_token,
-    }
+def build_qr_payload(serial: str, jwt_token: str) -> str:
+    # v=2 minimal envelope, uuid + oob live in the JWT.
+    # sn kept for human-readable logging before signature verify
+    qr = {"v": 2, "sn": serial, "jwt": jwt_token}
     return b64u(json.dumps(qr, separators=(",", ":")).encode())
 
 
@@ -247,30 +219,86 @@ def flash_factory_nvs(port: str, nvs_bin: Path) -> None:
     )
 
 
+def warn_if_expiring(claim_exp: int, label: str = "JWT") -> None:
+    days_left = days_until(claim_exp)
+    if days_left <= 0:
+        sys.stderr.write(f"factory-flash: warning, {label} EXPIRED {-days_left:.0f}d ago\n")
+    elif days_left <= EXPIRY_WARN_DAYS:
+        sys.stderr.write(
+            f"factory-flash: warning, {label} expires in {days_left:.0f}d "
+            f"(< {EXPIRY_WARN_DAYS}d). Consider --force to re-roll before shipping.\n"
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="DockPulse per-device factory flash")
     ap.add_argument("--serial", required=True, help="human-readable SN, e.g. DP-N-000123")
-    ap.add_argument("--port", default=default_port(), help="serial port (default: first cu.usbmodem*)")
+    ap.add_argument("--port", default=None, help="serial port (default: first attached usb-serial)")
     ap.add_argument("--role", choices=["sensor", "gateway"], default="sensor")
     ap.add_argument("--key", default=str(REPO / "factory/private/factory.pem"))
     ap.add_argument("--out", default=None, help="artefact dir (default: factory/devices/<serial>)")
     ap.add_argument("--exp-days", type=int, default=365)
     ap.add_argument("--nvs-only", action="store_true", help="skip app/bootloader flash")
     ap.add_argument("--no-flash", action="store_true", help="generate artefacts only")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing device artefacts. invalidates the previously printed sticker.",
+    )
+    ap.add_argument(
+        "--reflash-nvs",
+        action="store_true",
+        help="re-flash factory_nvs.bin from existing artefacts without regenerating "
+        "OOB or JWT. recovers a board after esptool erase_flash wiped factory_nvs.",
+    )
     args = ap.parse_args()
 
-    if not args.port and not args.no_flash:
-        fail("no /dev/cu.usbmodem* found. Plug in a board or pass --port, or use --no-flash.")
+    # resolve port lazily so plugging in after script start still works
+    port = args.port or default_port()
+    if not port and not args.no_flash:
+        fail("no usb-serial device found. Plug in a board or pass --port, or use --no-flash.")
     priv_path = Path(args.key)
-    if not priv_path.is_file():
+    if not args.reflash_nvs and not priv_path.is_file():
         fail(f"factory private key missing at {priv_path}. Run tools/factory-keygen.sh.")
+    if not args.reflash_nvs:
+        assert_path_gitignored(priv_path, "private key")
 
     out_dir = Path(args.out) if args.out else REPO / "factory/devices" / args.serial
     out_dir.mkdir(parents=True, exist_ok=True)
+    assert_path_gitignored(out_dir, "per-device artefact dir")
 
     build_dir = REPO / ("build" if args.role == "gateway" else "build_sensor")
+    device_json = out_dir / "device.json"
+    nvs_bin = out_dir / "factory_nvs.bin"
 
     activate_idf()
+
+    # write existing nvs blob without regen, sticker JWT + OOB stay valid
+    if args.reflash_nvs:
+        if not nvs_bin.is_file() or not device_json.is_file():
+            fail(
+                f"--reflash-nvs needs existing artefacts in {out_dir}. "
+                "Run a regular factory-flash first."
+            )
+        existing = json.loads(device_json.read_text())
+        warn_if_expiring(existing["claim_exp"])
+        flash_factory_nvs(port, nvs_bin)
+        print(f"reflashed factory_nvs for {args.serial} from {nvs_bin}")
+        return 0
+
+    # refuse to clobber an existing flashed device without --force
+    if device_json.is_file() and not args.force:
+        existing = json.loads(device_json.read_text())
+        days_left = days_until(existing["claim_exp"])
+        msg = (
+            f"{args.serial} already factory-flashed (uuid={existing['uuid']}, "
+            f"jwt valid {days_left:+.0f}d).\n"
+            "  --force          regenerate OOB+JWT, invalidates current sticker\n"
+            "  --reflash-nvs    re-flash existing OOB to device (recovery)\n"
+            "  tools/print-qr.py --serial " + args.serial + "  reprint sticker"
+        )
+        warn_if_expiring(existing["claim_exp"])
+        fail(msg)
 
     if args.no_flash:
         # bench mode: caller supplied a MAC out-of-band via env or we punt
@@ -279,17 +307,19 @@ def main() -> int:
             fail("--no-flash requires DP_FACTORY_MAC=<12 hex> env (board not attached)")
         mac = bytes.fromhex(mac_env.replace(":", ""))
     else:
-        mac = read_mac(args.port)
+        mac = read_mac(port)
 
     uuid_hex = compose_uuid(mac)
     oob = secrets.token_bytes(16)
     oob_hex = oob.hex()
 
     priv_pem = priv_path.read_bytes()
-    jwt_token, claim = sign_claim(uuid_hex, args.serial, args.exp_days, priv_pem)
-    qr_text = build_qr_payload(uuid_hex, oob_hex, args.serial, jwt_token)
+    jwt_token, claim = sign_claim(
+        uuid_hex, oob_hex, args.serial, args.exp_days, priv_pem
+    )
+    qr_text = build_qr_payload(args.serial, jwt_token)
+    warn_if_expiring(claim["exp"], label=f"new JWT (--exp-days={args.exp_days})")
 
-    nvs_bin = out_dir / "factory_nvs.bin"
     gen_nvs_image(oob_hex, nvs_bin)
 
     qr_png = out_dir / "qr.png"
@@ -297,7 +327,7 @@ def main() -> int:
 
     (out_dir / "claim.json").write_text(json.dumps(claim, indent=2) + "\n")
     (out_dir / "qr.txt").write_text(qr_text + "\n")
-    (out_dir / "device.json").write_text(
+    device_json.write_text(
         json.dumps(
             {
                 "serial": args.serial,
@@ -321,8 +351,8 @@ def main() -> int:
         return 0
 
     if not args.nvs_only:
-        flash_app(args.port, build_dir)
-    flash_factory_nvs(args.port, nvs_bin)
+        flash_app(port, build_dir)
+    flash_factory_nvs(port, nvs_bin)
 
     print("flash complete")
     return 0
