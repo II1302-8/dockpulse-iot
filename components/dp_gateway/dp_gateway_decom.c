@@ -16,7 +16,8 @@
 
 static const char *TAG = "dp_gw_decom";
 
-static void publish_resp(const char *req_id, const char *status, const char *code, const char *msg)
+static void publish_resp(const char *req_id, const char *node_id, const char *status,
+                         const char *code, const char *msg)
 {
     if (!req_id) {
         return;
@@ -26,6 +27,9 @@ static void publish_resp(const char *req_id, const char *status, const char *cod
         return;
     }
     cJSON_AddStringToObject(root, "req_id", req_id);
+    if (node_id) {
+        cJSON_AddStringToObject(root, "node_id", node_id);
+    }
     cJSON_AddStringToObject(root, "status", status);
     if (code) {
         cJSON_AddStringToObject(root, "code", code);
@@ -59,7 +63,7 @@ static void handle_decommission_req(const char *payload, int len)
 
     if (!unicast_str) {
         ESP_LOGW(TAG, "missing unicast_addr req=%s", req_id ? req_id : "?");
-        publish_resp(req_id, "err", "bad-req", "missing unicast_addr");
+        publish_resp(req_id, node_id, "err", "bad-req", "missing unicast_addr");
         cJSON_Delete(root);
         return;
     }
@@ -69,7 +73,7 @@ static void handle_decommission_req(const char *payload, int len)
     unsigned long parsed = strtoul(unicast_str, &end, 0);
     if (end == unicast_str || parsed == 0 || parsed > 0xFFFF) {
         ESP_LOGW(TAG, "bad unicast_addr=%s req=%s", unicast_str, req_id ? req_id : "?");
-        publish_resp(req_id, "err", "bad-unicast", NULL);
+        publish_resp(req_id, node_id, "err", "bad-unicast", NULL);
         cJSON_Delete(root);
         return;
     }
@@ -86,10 +90,10 @@ static void handle_decommission_req(const char *payload, int len)
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "decom req=%s node=%s addr=0x%04x", req_id ? req_id : "?",
                  node_id ? node_id : "?", addr);
-        publish_resp(req_id, "ok", NULL, NULL);
+        publish_resp(req_id, node_id, "ok", NULL, NULL);
     } else {
         ESP_LOGW(TAG, "forget addr=0x%04x err=%d", addr, err);
-        publish_resp(req_id, "err", "nvs-write", NULL);
+        publish_resp(req_id, node_id, "err", "nvs-write", NULL);
     }
     cJSON_Delete(root);
 }

@@ -426,6 +426,9 @@ esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr)
     if (!unicast_addr) {
         return ESP_ERR_INVALID_ARG;
     }
+    // wipe remote node nvs first, else delete only frees the local slot
+    // and node stays on mesh with stale keys, never re-enters adoption
+    send_node_reset(unicast_addr);
     return esp_ble_mesh_provisioner_delete_node_with_addr(unicast_addr);
 }
 
