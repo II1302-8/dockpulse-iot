@@ -202,8 +202,7 @@ esp_err_t dp_prov_get_static_oob(uint8_t out[DP_PROV_OOB_LEN])
     if (err == ESP_ERR_NOT_FOUND) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (err != ESP_OK && err != ESP_ERR_NVS_NO_FREE_PAGES &&
-        err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (err != ESP_OK && err != ESP_ERR_NVS_NO_FREE_PAGES && err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
         return err;
     }
     nvs_handle_t h;
