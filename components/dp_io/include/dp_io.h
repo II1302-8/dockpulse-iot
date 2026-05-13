@@ -35,8 +35,6 @@ esp_err_t dp_battery_init(void);
 uint8_t dp_battery_read_pct(void);
 // ── END ADDED ─────────────────────────────────────────────────────────────────
 
-
-
 #ifdef __cplusplus
 }
 #endif

@@ -55,6 +55,16 @@ menu "DockPulse"
         int "Long-press hold time (ms)"
         default 5000
 
+    config DOCKPULSE_BATTERY_ADC_GPIO
+        int "Battery-sense ADC GPIO (-1 to disable)"
+        range -1 4
+        default -1
+        help
+            ADC1 channel pin reading battery voltage through a 1:1
+            divider (R1=R2=100k). ESP32-C3 ADC1 channels: GPIO 0..4
+            = CH0..CH4. ADC2 is unusable while Wi-Fi/BLE is active.
+            Leave -1 on boards without the divider (gateway, bench).
+
     menu "Sensor"
         depends on DOCKPULSE_ROLE_SENSOR
 

@@ -197,21 +197,20 @@ esp_err_t dp_button_init(dp_button_long_press_cb_t cb, void *user_ctx)
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-
 // ── ADDED: Battery ADC ────────────────────────────────────────────────────────
 // Reads battery+ voltage through a 1:1 divider (R1=R2=100 kΩ) on
 // CONFIG_DOCKPULSE_BATTERY_ADC_GPIO. Uses the ESP-IDF oneshot ADC driver with
 // curve-fitting calibration for linearisation. Falls back to a plain linear
 // scale if eFuse calibration data is absent from this chip.
 
+#include "dp_common.h" // DP_BATTERY_UNKNOWN
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
-#include "dp_common.h" // DP_BATTERY_UNKNOWN
 
 static adc_oneshot_unit_handle_t s_adc_handle;
-static adc_cali_handle_t         s_cali_handle;
-static bool                      s_cali_ok;
+static adc_cali_handle_t s_cali_handle;
+static bool s_cali_ok;
 
 esp_err_t dp_battery_init(void)
 {
@@ -236,7 +235,7 @@ esp_err_t dp_battery_init(void)
     }
 
     adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten    = ADC_ATTEN_DB_12, // 0–3.3 V range; divider keeps pin ≤ 2.1 V
+        .atten = ADC_ATTEN_DB_12,    // 0–3.3 V range; divider keeps pin ≤ 2.1 V
         .bitwidth = ADC_BITWIDTH_12, // 0–4095
     };
     err = adc_oneshot_config_channel(s_adc_handle, channel, &chan_cfg);
@@ -249,9 +248,9 @@ esp_err_t dp_battery_init(void)
     // Most retail ESP32-C3 modules have calibration data burned in eFuse;
     // if not, we fall back to a plain linear scale below.
     adc_cali_curve_fitting_config_t cali_cfg = {
-        .unit_id  = ADC_UNIT_1,
-        .chan     = channel,
-        .atten    = ADC_ATTEN_DB_12,
+        .unit_id = ADC_UNIT_1,
+        .chan = channel,
+        .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
     s_cali_ok = (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_cali_handle) == ESP_OK);
@@ -295,8 +294,10 @@ uint8_t dp_battery_read_pct(void)
 
     // Li-ion 18650 discharge curve: 3000 mV = empty (0%), 4200 mV = full (100%)
     int pct = (v_batt_mv - 3000) * 100 / (4200 - 3000);
-    if (pct < 0)   pct = 0;
-    if (pct > 100) pct = 100;
+    if (pct < 0)
+        pct = 0;
+    if (pct > 100)
+        pct = 100;
 
     return (uint8_t)pct;
 }
