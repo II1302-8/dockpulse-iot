@@ -31,7 +31,11 @@ static berth_status_t to_status(const dp_radar_sample_t *s, bool occupied, uint8
         .berth_id = berth_id,
         .occupied = occupied,
         .sensor_raw_mm = (uint16_t)(s->distance_cm * 10u),
-        .battery_pct = DP_BATTERY_UNKNOWN,
+//.battery_pct = DP_BATTERY_UNKNOWN,
+        // ── ADDED: read live battery percentage instead of leaving it unknown ──
+        .battery_pct = dp_battery_read_pct(),
+        // ── END ADDED ──
+
         .ts_ms = s->ts_ms,
     };
 }
@@ -67,6 +71,10 @@ void dp_sensor_run(void)
     }
     ESP_LOGI(TAG, "adopted — bringing up radar");
     ESP_ERROR_CHECK(dp_radar_init());
+
+        // ── ADDED: initialise battery ADC after radar (both use GPIO, order avoids conflicts) ──
+    ESP_ERROR_CHECK(dp_battery_init());
+    // ── END ADDED ──
 
     uint8_t node_id = (uint8_t)CONFIG_DOCKPULSE_NODE_ID;
 

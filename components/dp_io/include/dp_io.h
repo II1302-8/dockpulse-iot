@@ -24,6 +24,19 @@ void dp_led_set(dp_led_state_t state);
 typedef void (*dp_button_long_press_cb_t)(void *user_ctx);
 esp_err_t dp_button_init(dp_button_long_press_cb_t cb, void *user_ctx);
 
+// ── ADDED: Battery ADC ────────────────────────────────────────────────────────
+// Reads battery voltage via a 1:1 voltage divider (R1=R2=100 kΩ) on
+// CONFIG_DOCKPULSE_BATTERY_ADC_GPIO. Call dp_battery_init() once at startup
+// (after dp_led_init / dp_button_init) before calling dp_battery_read_pct().
+esp_err_t dp_battery_init(void);
+
+// Returns battery percentage 0–100.
+// Returns DP_BATTERY_UNKNOWN (0xFF) if init was not called or ADC read fails.
+uint8_t dp_battery_read_pct(void);
+// ── END ADDED ─────────────────────────────────────────────────────────────────
+
+
+
 #ifdef __cplusplus
 }
 #endif
