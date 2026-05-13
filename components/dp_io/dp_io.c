@@ -145,6 +145,72 @@ esp_err_t dp_led_init(void)
 
 void dp_led_set(dp_led_state_t state) { s_led_state = state; }
 
+static int s_berth_green_gpio = -1;
+static int s_berth_red_gpio = -1;
+static bool s_berth_active_low;
+
+static inline void berth_drive(int gpio, bool on)
+{
+    if (gpio < 0)
+        return;
+    int level = on ? 1 : 0;
+    if (s_berth_active_low)
+        level = !level;
+    gpio_set_level((gpio_num_t)gpio, level);
+}
+
+esp_err_t dp_berth_led_init(void)
+{
+    s_berth_green_gpio = CONFIG_DOCKPULSE_BERTH_LED_GREEN_GPIO;
+    s_berth_red_gpio = CONFIG_DOCKPULSE_BERTH_LED_RED_GPIO;
+    // bool Kconfigs vanish from sdkconfig.h when unset rather than =0
+#ifdef CONFIG_DOCKPULSE_BERTH_LED_ACTIVE_LOW
+    s_berth_active_low = true;
+#else
+    s_berth_active_low = false;
+#endif
+
+    if (s_berth_green_gpio < 0 && s_berth_red_gpio < 0) {
+        ESP_LOGI(TAG, "berth LED disabled");
+        return ESP_OK;
+    }
+
+    uint64_t mask = 0;
+    if (s_berth_green_gpio >= 0)
+        mask |= 1ULL << s_berth_green_gpio;
+    if (s_berth_red_gpio >= 0)
+        mask |= 1ULL << s_berth_red_gpio;
+
+    gpio_config_t io = {
+        .pin_bit_mask = mask,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    esp_err_t err = gpio_config(&io);
+    if (err != ESP_OK)
+        return err;
+
+    // default free on boot, flips on first sample
+    berth_drive(s_berth_red_gpio, false);
+    berth_drive(s_berth_green_gpio, true);
+    return ESP_OK;
+}
+
+void dp_berth_led_set(bool occupied)
+{
+    // one color at a time: kill the other before lighting to avoid
+    // a glitch frame where both anodes pull high
+    if (occupied) {
+        berth_drive(s_berth_green_gpio, false);
+        berth_drive(s_berth_red_gpio, true);
+    } else {
+        berth_drive(s_berth_red_gpio, false);
+        berth_drive(s_berth_green_gpio, true);
+    }
+}
+
 // poll not ISR. gpio 9 is c3 boot strap so ISR edge races boot ROM.
 // poll loop debounces for free
 static void button_task(void *arg)

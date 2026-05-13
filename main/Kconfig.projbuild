@@ -55,6 +55,23 @@ menu "DockPulse"
         int "Long-press hold time (ms)"
         default 5000
 
+    config DOCKPULSE_BERTH_LED_GREEN_GPIO
+        int "Berth-status green LED GPIO (-1 to disable)"
+        default 3
+        help
+            Dual-color berth-occupancy LED, green leg. Common-cathode
+            3-pin module with a 100R series resistor on each anode.
+            Drives high to light by default; flip
+            DOCKPULSE_BERTH_LED_ACTIVE_LOW if the schematic inverts.
+
+    config DOCKPULSE_BERTH_LED_RED_GPIO
+        int "Berth-status red LED GPIO (-1 to disable)"
+        default 4
+
+    config DOCKPULSE_BERTH_LED_ACTIVE_LOW
+        bool "Berth LED is active-low"
+        default n
+
     menu "Sensor"
         depends on DOCKPULSE_ROLE_SENSOR
 

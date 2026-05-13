@@ -56,6 +56,8 @@ static berth_diag_t to_diag(const dp_radar_sample_t *s, uint8_t node_id, uint16_
 void dp_sensor_run(void)
 {
     dp_led_set(DP_LED_PROVISIONING);
+    // boot in "free" so unprovisioned berths read green not dark
+    ESP_ERROR_CHECK(dp_berth_led_init());
     ESP_ERROR_CHECK(dp_mesh_init(&(const dp_mesh_cfg_t){
         .role = DP_MESH_ROLE_SENSOR,
         .sensor_ready = on_sensor_ready,
@@ -97,6 +99,7 @@ void dp_sensor_run(void)
         consecutive_failures = 0;
 
         bool near = dp_radar_filter_near(&s);
+        dp_berth_led_set(near);
 
         TickType_t now = xTaskGetTickCount();
         if (last_publish == 0 || (now - last_publish) >= publish_interval) {
