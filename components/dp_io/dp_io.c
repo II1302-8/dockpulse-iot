@@ -262,3 +262,109 @@ esp_err_t dp_button_init(dp_button_long_press_cb_t cb, void *user_ctx)
     BaseType_t ok = xTaskCreate(button_task, "dp_btn", 2048, NULL, 4, NULL);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
+
+// ── ADDED: Battery ADC ────────────────────────────────────────────────────────
+// Reads battery+ voltage through a 1:1 divider (R1=R2=100 kΩ) on
+// CONFIG_DOCKPULSE_BATTERY_ADC_GPIO. Uses the ESP-IDF oneshot ADC driver with
+// curve-fitting calibration for linearisation. Falls back to a plain linear
+// scale if eFuse calibration data is absent from this chip.
+
+#include "dp_common.h" // DP_BATTERY_UNKNOWN
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
+
+static adc_oneshot_unit_handle_t s_adc_handle;
+static adc_cali_handle_t s_cali_handle;
+static bool s_cali_ok;
+
+esp_err_t dp_battery_init(void)
+{
+    int gpio = CONFIG_DOCKPULSE_BATTERY_ADC_GPIO;
+    if (gpio < 0) {
+        ESP_LOGI(TAG, "battery ADC disabled");
+        return ESP_OK;
+    }
+
+    // Map the GPIO number to an ADC1 channel. On the ESP32-C3:
+    //   GPIO 0 = CH0, GPIO 1 = CH1, GPIO 2 = CH2, GPIO 3 = CH3, GPIO 4 = CH4
+    // ADC2 must not be used while BLE / Wi-Fi is active.
+    adc_channel_t channel = (adc_channel_t)gpio; // CH index == GPIO on C3
+
+    adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id = ADC_UNIT_1,
+    };
+    esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_adc_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "adc_oneshot_new_unit err=%d", err);
+        return err;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,    // 0–3.3 V range; divider keeps pin ≤ 2.1 V
+        .bitwidth = ADC_BITWIDTH_12, // 0–4095
+    };
+    err = adc_oneshot_config_channel(s_adc_handle, channel, &chan_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "adc_oneshot_config_channel err=%d", err);
+        return err;
+    }
+
+    // Curve-fitting calibration gives the best linearity across the range.
+    // Most retail ESP32-C3 modules have calibration data burned in eFuse;
+    // if not, we fall back to a plain linear scale below.
+    adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .chan = channel,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    s_cali_ok = (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_cali_handle) == ESP_OK);
+    if (!s_cali_ok) {
+        ESP_LOGW(TAG, "ADC calibration unavailable — falling back to linear scale");
+    }
+
+    ESP_LOGI(TAG, "battery ADC ready gpio=%d cali=%d", gpio, s_cali_ok);
+    return ESP_OK;
+}
+
+uint8_t dp_battery_read_pct(void)
+{
+    if (!s_adc_handle) {
+        return DP_BATTERY_UNKNOWN;
+    }
+
+    int gpio = CONFIG_DOCKPULSE_BATTERY_ADC_GPIO;
+    if (gpio < 0) {
+        return DP_BATTERY_UNKNOWN;
+    }
+
+    adc_channel_t channel = (adc_channel_t)gpio;
+
+    int raw = 0;
+    if (adc_oneshot_read(s_adc_handle, channel, &raw) != ESP_OK) {
+        return DP_BATTERY_UNKNOWN;
+    }
+
+    int v_pin_mv = 0;
+    if (s_cali_ok) {
+        // Calibrated path: returns millivolts linearised against eFuse data
+        adc_cali_raw_to_voltage(s_cali_handle, raw, &v_pin_mv);
+    } else {
+        // Fallback: simple linear scale (less accurate near rail voltages)
+        v_pin_mv = raw * 3300 / 4095;
+    }
+
+    // Undo the 1:1 voltage divider to get the actual battery terminal voltage
+    int v_batt_mv = v_pin_mv * 2;
+
+    // Li-ion 18650 discharge curve: 3000 mV = empty (0%), 4200 mV = full (100%)
+    int pct = (v_batt_mv - 3000) * 100 / (4200 - 3000);
+    if (pct < 0)
+        pct = 0;
+    if (pct > 100)
+        pct = 100;
+
+    return (uint8_t)pct;
+}
+// ── END ADDED ────────────────────────────────────────────────────────────────
