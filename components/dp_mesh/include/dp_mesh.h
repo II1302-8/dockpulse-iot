@@ -47,8 +47,31 @@ typedef void (*dp_mesh_prov_done_cb_t)(const dp_mesh_prov_result_t *res, void *c
 esp_err_t dp_mesh_gateway_provision(const uint8_t uuid[16], const uint8_t *static_oob,
                                     uint32_t timeout_ms, dp_mesh_prov_done_cb_t cb, void *ctx);
 
-// drop node from provisioner table. frees the unicast slot for reuse
+// drop node from provisioner table. frees the unicast slot for reuse.
+// best-effort: sends one Node Reset then does local cleanup whether or not
+// the node ack'd. prefer dp_mesh_gateway_decommission_node for the operator
+// flow since it surfaces orphan state
 esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr);
+
+// --- gateway decommission API ---
+
+typedef enum {
+    DP_MESH_DECOM_OK = 0,    // node ack'd the Config Node Reset
+    DP_MESH_DECOM_ORPHAN,    // local cleanup done, node never ack'd
+    DP_MESH_DECOM_ERR,       // local cleanup failed (NVS write etc)
+} dp_mesh_decom_result_t;
+
+typedef void (*dp_mesh_decom_done_cb_t)(dp_mesh_decom_result_t result,
+                                         int attempts, const char *err_code,
+                                         void *ctx);
+
+// Async decommission: retry Config Node Reset up to N times listening for
+// ack via the cfg-client callback, then run local cleanup, then fire cb.
+// One flow at a time, returns ESP_ERR_INVALID_STATE if already in progress.
+// cb runs from mesh-stack threads
+esp_err_t dp_mesh_gateway_decommission_node(uint16_t unicast_addr,
+                                             dp_mesh_decom_done_cb_t cb,
+                                             void *ctx);
 
 // true if the gateway already provisioned a node with this UUID. used to
 // short-circuit re-adoption with code=already-provisioned instead of a 180s

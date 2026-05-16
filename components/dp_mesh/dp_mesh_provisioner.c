@@ -30,6 +30,18 @@ static esp_timer_handle_t s_prov_timer;
 static dp_mesh_prov_state_cb_t s_state_cb;
 static void *s_state_ctx;
 
+// in-flight decommission state. one at a time so the cfg-client cb can
+// match node-reset acks unambiguously. on timeout we retry up to N times,
+// after that we fall through to local cleanup and report orphan
+#define DECOM_MAX_ATTEMPTS 3
+static struct {
+    bool active;
+    uint16_t addr;
+    int attempts;
+    dp_mesh_decom_done_cb_t cb;
+    void *ctx;
+} s_decom;
+
 static void emit_state(const char *state)
 {
     if (s_state_cb && s_prov_in_flight) {
@@ -82,16 +94,53 @@ void dp_mesh_provisioner_set_callbacks(dp_mesh_status_handler_t status_cb,
     s_diag_cb = diag_cb;
 }
 
+static void decom_send_reset_attempt(uint16_t addr);
+static void decom_local_cleanup_and_finish(dp_mesh_decom_result_t result,
+                                           const char *err_code);
+
 // ----- cfg-client cb. fires after each AppKeyAdd/Bind/PubSet response -----
 
 static void on_cfg_client(esp_ble_mesh_cfg_client_cb_event_t event,
                           esp_ble_mesh_cfg_client_cb_param_t *param)
 {
+    int err = param->error_code;
+    uint32_t op = param->params ? param->params->opcode : 0;
+
+    // decom path is independent of prov flow. opcode==NODE_RESET filters to
+    // our send; ignore stray cfg events from other flows
+    if (s_decom.active && op == ESP_BLE_MESH_MODEL_OP_NODE_RESET) {
+        ESP_LOGI(TAG, "decom cfg cli evt=%d err=%d att=%d", (int)event, err, s_decom.attempts);
+        if (event == ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT) {
+            return;
+        }
+        if (event == ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT) {
+            if (s_decom.attempts < DECOM_MAX_ATTEMPTS) {
+                s_decom.attempts++;
+                ESP_LOGW(TAG, "node-reset timeout addr=0x%04x retry %d",
+                         s_decom.addr, s_decom.attempts);
+                decom_send_reset_attempt(s_decom.addr);
+                return;
+            }
+            ESP_LOGW(TAG, "node-reset gave up after %d attempts addr=0x%04x",
+                     s_decom.attempts, s_decom.addr);
+            decom_local_cleanup_and_finish(DP_MESH_DECOM_ORPHAN, NULL);
+            return;
+        }
+        if (err != 0) {
+            // node refused/errored, treat as orphan too. local cleanup still
+            // valuable so the slot is reusable
+            ESP_LOGW(TAG, "node-reset err=%d addr=0x%04x", err, s_decom.addr);
+            decom_local_cleanup_and_finish(DP_MESH_DECOM_ORPHAN, NULL);
+            return;
+        }
+        // ok ack
+        decom_local_cleanup_and_finish(DP_MESH_DECOM_OK, NULL);
+        return;
+    }
+
     if (!s_prov_in_flight) {
         return;
     }
-    int err = param->error_code;
-    uint32_t op = param->params ? param->params->opcode : 0;
     ESP_LOGI(TAG, "cfg cli evt=%d op=0x%04" PRIx32 " err=%d step=%d att=%d", (int)event, op, err,
              (int)s_cfg_step, s_cfg_attempts);
     if (event == ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT) {
@@ -430,6 +479,76 @@ esp_err_t dp_mesh_gateway_delete_node(uint16_t unicast_addr)
     // and node stays on mesh with stale keys, never re-enters adoption
     send_node_reset(unicast_addr);
     return esp_ble_mesh_provisioner_delete_node_with_addr(unicast_addr);
+}
+
+// re-send Config Node Reset to s_decom.addr. on_cfg_client picks up the
+// response/timeout and decides whether to retry or finalize
+static void decom_send_reset_attempt(uint16_t addr)
+{
+    send_node_reset(addr);
+}
+
+static void decom_local_cleanup_and_finish(dp_mesh_decom_result_t result,
+                                           const char *err_code)
+{
+    uint16_t addr = s_decom.addr;
+    int attempts = s_decom.attempts;
+    dp_mesh_decom_done_cb_t cb = s_decom.cb;
+    void *ctx = s_decom.ctx;
+
+    // local cleanup runs regardless of node ack: frees the provisioner slot
+    // and removes our NVS bookkeeping. err here demotes ok→err, but orphan
+    // stays orphan (we already lost the node, no point hiding it as err)
+    esp_err_t d = esp_ble_mesh_provisioner_delete_node_with_addr(addr);
+    if (d != ESP_OK && d != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "decom delete addr=0x%04x err=%d", addr, d);
+        if (result == DP_MESH_DECOM_OK) {
+            result = DP_MESH_DECOM_ERR;
+            err_code = "delete-fail";
+        }
+    }
+    esp_err_t f = dp_prov_forget_unicast(addr);
+    if (f != ESP_OK) {
+        ESP_LOGW(TAG, "decom forget addr=0x%04x err=%d", addr, f);
+        if (result == DP_MESH_DECOM_OK) {
+            result = DP_MESH_DECOM_ERR;
+            err_code = "nvs-write";
+        }
+    }
+
+    // clear before cb so a cb-initiated re-decom doesn't see stale state
+    s_decom.active = false;
+    s_decom.addr = 0;
+    s_decom.attempts = 0;
+    s_decom.cb = NULL;
+    s_decom.ctx = NULL;
+
+    if (cb) {
+        cb(result, attempts, err_code, ctx);
+    }
+}
+
+esp_err_t dp_mesh_gateway_decommission_node(uint16_t unicast_addr,
+                                             dp_mesh_decom_done_cb_t cb,
+                                             void *ctx)
+{
+    if (dp_mesh_get_role() != DP_MESH_ROLE_GATEWAY) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!unicast_addr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_decom.active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_decom.active = true;
+    s_decom.addr = unicast_addr;
+    s_decom.attempts = 1;
+    s_decom.cb = cb;
+    s_decom.ctx = ctx;
+    ESP_LOGI(TAG, "decom start addr=0x%04x", unicast_addr);
+    decom_send_reset_attempt(unicast_addr);
+    return ESP_OK;
 }
 
 bool dp_mesh_gateway_has_node_with_uuid(const uint8_t uuid[16])

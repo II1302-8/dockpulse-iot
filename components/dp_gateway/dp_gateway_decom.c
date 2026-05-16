@@ -12,12 +12,11 @@
 #include "esp_log.h"
 
 #include "dp_mesh.h"
-#include "dp_prov.h"
 
 static const char *TAG = "dp_gw_decom";
 
 static void publish_resp(const char *req_id, const char *node_id, const char *status,
-                         const char *code, const char *msg)
+                         const char *code, const char *msg, int attempts)
 {
     if (!req_id) {
         return;
@@ -37,6 +36,9 @@ static void publish_resp(const char *req_id, const char *node_id, const char *st
     if (msg) {
         cJSON_AddStringToObject(root, "msg", msg);
     }
+    if (attempts > 0) {
+        cJSON_AddNumberToObject(root, "attempts", attempts);
+    }
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!payload) {
@@ -47,6 +49,26 @@ static void publish_resp(const char *req_id, const char *node_id, const char *st
              CONFIG_DOCKPULSE_GATEWAY_ID);
     dp_gateway_mqtt_publish(topic, payload, 1);
     cJSON_free(payload);
+}
+
+// owned by req handler, freed in the decom callback. inline storage keeps
+// the heap quiet under bursts of decoms
+typedef struct {
+    char req_id[64];
+    char node_id[64];
+} decom_ctx_t;
+
+static void on_decom_done(dp_mesh_decom_result_t result, int attempts,
+                          const char *err_code, void *ctx)
+{
+    decom_ctx_t *c = (decom_ctx_t *)ctx;
+    const char *status = result == DP_MESH_DECOM_OK     ? "ok"
+                         : result == DP_MESH_DECOM_ORPHAN ? "orphan"
+                                                          : "err";
+    ESP_LOGI(TAG, "decom done req=%s status=%s attempts=%d", c->req_id, status, attempts);
+    publish_resp(c->req_id, c->node_id[0] ? c->node_id : NULL, status, err_code, NULL,
+                 attempts);
+    free(c);
 }
 
 static void handle_decommission_req(const char *payload, int len)
@@ -63,7 +85,7 @@ static void handle_decommission_req(const char *payload, int len)
 
     if (!unicast_str) {
         ESP_LOGW(TAG, "missing unicast_addr req=%s", req_id ? req_id : "?");
-        publish_resp(req_id, node_id, "err", "bad-req", "missing unicast_addr");
+        publish_resp(req_id, node_id, "err", "bad-req", "missing unicast_addr", 0);
         cJSON_Delete(root);
         return;
     }
@@ -73,27 +95,33 @@ static void handle_decommission_req(const char *payload, int len)
     unsigned long parsed = strtoul(unicast_str, &end, 0);
     if (end == unicast_str || parsed == 0 || parsed > 0xFFFF) {
         ESP_LOGW(TAG, "bad unicast_addr=%s req=%s", unicast_str, req_id ? req_id : "?");
-        publish_resp(req_id, node_id, "err", "bad-unicast", NULL);
+        publish_resp(req_id, node_id, "err", "bad-unicast", NULL, 0);
         cJSON_Delete(root);
         return;
     }
     uint16_t addr = (uint16_t)parsed;
 
-    // free the unicast slot in the mesh provisioner table else the addr
-    // allocator keeps walking forward and we leak slots forever
-    esp_err_t mesh_err = dp_mesh_gateway_delete_node(addr);
-    if (mesh_err != ESP_OK && mesh_err != ESP_ERR_NOT_FOUND) {
-        ESP_LOGW(TAG, "delete_node addr=0x%04x err=%d", addr, mesh_err);
+    decom_ctx_t *c = calloc(1, sizeof(*c));
+    if (!c) {
+        publish_resp(req_id, node_id, "err", "unknown", "oom", 0);
+        cJSON_Delete(root);
+        return;
+    }
+    if (req_id) {
+        strncpy(c->req_id, req_id, sizeof(c->req_id) - 1);
+    }
+    if (node_id) {
+        strncpy(c->node_id, node_id, sizeof(c->node_id) - 1);
     }
 
-    esp_err_t err = dp_prov_forget_unicast(addr);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "decom req=%s node=%s addr=0x%04x", req_id ? req_id : "?",
-                 node_id ? node_id : "?", addr);
-        publish_resp(req_id, node_id, "ok", NULL, NULL);
-    } else {
-        ESP_LOGW(TAG, "forget addr=0x%04x err=%d", addr, err);
-        publish_resp(req_id, node_id, "err", "nvs-write", NULL);
+    esp_err_t err = dp_mesh_gateway_decommission_node(addr, on_decom_done, c);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "decom_node start err=%d addr=0x%04x", err, addr);
+        const char *msg = err == ESP_ERR_INVALID_STATE
+                              ? "another decommission in flight"
+                              : NULL;
+        publish_resp(req_id, node_id, "err", "unknown", msg, 0);
+        free(c);
     }
     cJSON_Delete(root);
 }
