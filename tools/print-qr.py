@@ -62,13 +62,13 @@ def main() -> int:
             days_left = days_until(data["claim_exp"])
             if days_left <= 0:
                 fail(
-                    f"JWT EXPIRED {-days_left:.0f}d ago for {args.serial}. "
+                    f"claim EXPIRED {-days_left:.0f}d ago for {args.serial}. "
                     "Re-roll first: tools/factory-flash.py --force --serial " + args.serial,
                     code=2,
                 )
             if days_left <= EXPIRY_WARN_DAYS:
                 sys.stderr.write(
-                    f"print-qr: warning, JWT expires in {days_left:.0f}d "
+                    f"print-qr: warning, claim expires in {days_left:.0f}d "
                     f"(< {EXPIRY_WARN_DAYS}d). Consider --force re-roll before printing.\n"
                 )
         except (json.JSONDecodeError, KeyError) as e:

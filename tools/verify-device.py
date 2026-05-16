@@ -3,7 +3,7 @@
 
 Connects to an attached board, reads the eFuse MAC via esptool, composes
 the expected mesh UUID, and matches against factory/devices/*/device.json.
-Prints PASS/FAIL with uuid + JWT expiry status. Useful before shipping a
+Prints PASS/FAIL with uuid + claim expiry status. Useful before shipping a
 device to make sure the printed sticker still matches the board.
 
 Usage:
@@ -54,12 +54,12 @@ def report(device: dict) -> int:
     print(f"  mac     {device['mac']}")
     print(f"  role    {device['role']}")
     if days_left <= 0:
-        print(f"  jwt     EXPIRED {-days_left:.0f}d ago — re-flash with --force before shipping")
+        print(f"  claim   EXPIRED {-days_left:.0f}d ago, re-flash with --force before shipping")
         return 2
     if days_left <= EXPIRY_WARN_DAYS:
-        print(f"  jwt     expires in {days_left:.0f}d — within {EXPIRY_WARN_DAYS}d warn window")
+        print(f"  claim   expires in {days_left:.0f}d, within {EXPIRY_WARN_DAYS}d warn window")
         return 1
-    print(f"  jwt     valid for {days_left:.0f}d")
+    print(f"  claim   valid for {days_left:.0f}d")
     return 0
 
 

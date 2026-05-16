@@ -3,9 +3,12 @@
 
 Reads the device MAC, composes a mesh UUID matching dp_prov_get_dev_uuid
 (MAC + "DOCKPULSE" + 0x01), generates a random 16-byte static OOB, signs
-an Ed25519 claim JWT with the factory key, builds an NVS partition image
-holding the OOB, flashes bootloader + ptable + app + factory_nvs over
-USB, and renders a QR PNG that the operator sticks on the enclosure.
+a COSE_Sign1 claim (Ed25519) with the factory key, builds an NVS
+partition image holding the OOB, flashes bootloader + ptable + app +
+factory_nvs over USB, and renders a base45-encoded QR PNG that fits on
+a 25mm sticker. After flashing the board, the script PUTs uuid+oob to
+the backend's /api/admin/factory-devices/{serial} so adoption can look
+them up by serial (the QR no longer carries them).
 
 Run after `tools/build.sh` for the role you want, with the board
 attached:
@@ -18,12 +21,11 @@ Prereqs:
 - ESP-IDF env activated (we activate it ourselves if you have $IDF_PATH set)
 - `tools/factory-keygen.sh` already ran once on this host
 - `qrencode` on $PATH for the sticker PNG (brew install qrencode)
-- `cryptography` Python package (already in IDF's pyenv)
+- `cryptography`, `cbor2`, `base45` Python packages (pip install if missing)
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import binascii
 import json
 import os
@@ -32,8 +34,19 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid as _uuid
 from pathlib import Path
+
+try:
+    import base45
+    import cbor2
+except ImportError:
+    sys.stderr.write(
+        "factory-flash: missing dep. pip install cbor2 base45 (both small, no native code).\n"
+    )
+    sys.exit(1)
 
 # share helpers with verify-device.py and print-qr.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -63,8 +76,14 @@ APP_FLASH_OFFSETS = {
 }
 
 
-def b64u(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+# COSE constants — keep in sync with backend/app/adoption/cose.py
+_COSE_TAG_SIGN1 = 18
+_COSE_HDR_ALG = 1
+_COSE_ALG_EDDSA = -8
+
+
+def _sig_structure(protected: bytes, payload: bytes) -> bytes:
+    return cbor2.dumps(["Signature1", protected, b"", payload])
 
 
 def assert_path_gitignored(path: Path, what: str) -> None:
@@ -96,36 +115,76 @@ def assert_path_gitignored(path: Path, what: str) -> None:
 
 
 def sign_claim(
-    uuid_hex: str, oob_hex: str, serial: str, exp_days: int, priv_pem: bytes
+    serial: str, exp_days: int, priv_pem: bytes
 ) -> tuple[str, dict]:
-    # avoid pyjwt dep — IDF's pyenv already has cryptography
+    """Build a base45 COSE_Sign1 (Ed25519) claim.
+
+    Returns (qr_text, claim_meta). claim_meta carries jti+exp so the
+    caller can write device.json + POST to the backend; uuid + oob are
+    NOT signed any more, the backend resolves them by serial.
+    """
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     priv = load_pem_private_key(priv_pem, password=None)
     now = int(time.time())
-    # both uuid and oob in the signed payload, tampering invalidates sig
-    claim = {
-        "iss": "factory",
-        "sub": serial,
-        "uuid": uuid_hex,
-        "oob": oob_hex,
-        "jti": str(_uuid.uuid4()),
-        "iat": now,
-        "exp": now + exp_days * 86400,
-    }
-    header = {"alg": "EdDSA", "typ": "JWT"}
-    h = b64u(json.dumps(header, separators=(",", ":")).encode())
-    p = b64u(json.dumps(claim, separators=(",", ":")).encode())
-    signing_input = f"{h}.{p}".encode()
-    signature = priv.sign(signing_input)
-    return f"{h}.{p}.{b64u(signature)}", claim
+    exp = now + exp_days * 86400
+    jti = _uuid.uuid4()
+    # compact CBOR payload: integer keys keep the QR tiny.
+    # 1=serial, 2=jti(16 raw bytes), 3=exp(unix int)
+    payload = cbor2.dumps({1: serial, 2: jti.bytes, 3: exp})
+    protected = cbor2.dumps({_COSE_HDR_ALG: _COSE_ALG_EDDSA})
+    signature = priv.sign(_sig_structure(protected, payload))
+    cose_blob = cbor2.dumps(
+        cbor2.CBORTag(_COSE_TAG_SIGN1, [protected, {}, payload, signature])
+    )
+    qr_text = base45.b45encode(cose_blob).decode()
+    return qr_text, {"jti": str(jti), "iat": now, "exp": exp}
 
 
-def build_qr_payload(serial: str, jwt_token: str) -> str:
-    # v=2 minimal envelope, uuid + oob live in the JWT.
-    # sn kept for human-readable logging before signature verify
-    qr = {"v": 2, "sn": serial, "jwt": jwt_token}
-    return b64u(json.dumps(qr, separators=(",", ":")).encode())
+def register_with_backend(
+    *,
+    backend_url: str,
+    serial: str,
+    uuid_hex: str,
+    oob_hex: str,
+    claim_jti: str,
+    claim_exp: int,
+    cf_token: str | None,
+) -> None:
+    """PUT device row to backend so adoption can resolve serial->uuid+oob.
+
+    Cloudflare Access service token via CF-Access-Client-Id/Secret headers
+    (operator sets DP_CF_ACCESS_CLIENT_ID and DP_CF_ACCESS_CLIENT_SECRET);
+    raw bearer also accepted via --backend-token if cf access is open.
+    """
+    url = backend_url.rstrip("/") + f"/api/admin/factory-devices/{serial}"
+    body = json.dumps(
+        {
+            "serial_number": serial,
+            "mesh_uuid": uuid_hex,
+            "oob_hex": oob_hex,
+            "claim_jti": claim_jti,
+            "claim_exp": claim_exp,
+        }
+    ).encode()
+    headers = {"content-type": "application/json"}
+    cf_id = os.environ.get("DP_CF_ACCESS_CLIENT_ID")
+    cf_secret = os.environ.get("DP_CF_ACCESS_CLIENT_SECRET")
+    if cf_id and cf_secret:
+        headers["CF-Access-Client-Id"] = cf_id
+        headers["CF-Access-Client-Secret"] = cf_secret
+    if cf_token:
+        headers["authorization"] = f"Bearer {cf_token}"
+    req = urllib.request.Request(url, data=body, headers=headers, method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            sys.stderr.write(
+                f"factory-flash: registered {serial} at backend ({resp.status})\n"
+            )
+    except urllib.error.HTTPError as err:
+        fail(f"backend register failed: {err.code} {err.reason} body={err.read()!r}")
+    except urllib.error.URLError as err:
+        fail(f"backend register failed: {err.reason}")
 
 
 def gen_nvs_image(oob_hex: str, out_bin: Path) -> None:
@@ -167,6 +226,27 @@ def render_qr_png(qr_text: str, out_png: Path) -> None:
         return
     subprocess.run(
         ["qrencode", "-l", "M", "-s", "8", "-o", str(out_png), qr_text],
+        check=True,
+    )
+
+
+def erase_chip(port: str) -> None:
+    # full chip erase wipes any stale factory_nvs / mesh prov state from prior runs
+    subprocess.run(
+        [
+            "esptool.py",
+            "--chip",
+            "esp32c3",
+            "--port",
+            port,
+            "--baud",
+            "460800",
+            "--before",
+            "default_reset",
+            "--after",
+            "hard_reset",
+            "erase_flash",
+        ],
         check=True,
     )
 
@@ -241,6 +321,12 @@ def main() -> int:
     ap.add_argument("--nvs-only", action="store_true", help="skip app/bootloader flash")
     ap.add_argument("--no-flash", action="store_true", help="generate artefacts only")
     ap.add_argument(
+        "--no-erase",
+        action="store_true",
+        help="skip full chip erase before flashing. default erases to wipe stale "
+        "NVS / mesh prov state. ignored for --nvs-only and --reflash-nvs.",
+    )
+    ap.add_argument(
         "--force",
         action="store_true",
         help="overwrite existing device artefacts. invalidates the previously printed sticker.",
@@ -250,6 +336,19 @@ def main() -> int:
         action="store_true",
         help="re-flash factory_nvs.bin from existing artefacts without regenerating "
         "OOB or JWT. recovers a board after esptool erase_flash wiped factory_nvs.",
+    )
+    ap.add_argument(
+        "--backend-url",
+        default=os.environ.get("DP_BACKEND_URL"),
+        help="backend base url (default $DP_BACKEND_URL). when set, registers "
+        "uuid+oob via PUT /api/admin/factory-devices/{serial} so adoption can "
+        "resolve them by serial.",
+    )
+    ap.add_argument(
+        "--backend-token",
+        default=os.environ.get("DP_BACKEND_TOKEN"),
+        help="optional bearer token for the backend admin endpoint when CF "
+        "Access service-token env vars aren't set",
     )
     args = ap.parse_args()
 
@@ -314,11 +413,8 @@ def main() -> int:
     oob_hex = oob.hex()
 
     priv_pem = priv_path.read_bytes()
-    jwt_token, claim = sign_claim(
-        uuid_hex, oob_hex, args.serial, args.exp_days, priv_pem
-    )
-    qr_text = build_qr_payload(args.serial, jwt_token)
-    warn_if_expiring(claim["exp"], label=f"new JWT (--exp-days={args.exp_days})")
+    qr_text, claim = sign_claim(args.serial, args.exp_days, priv_pem)
+    warn_if_expiring(claim["exp"], label=f"new claim (--exp-days={args.exp_days})")
 
     gen_nvs_image(oob_hex, nvs_bin)
 
@@ -348,11 +444,43 @@ def main() -> int:
 
     if args.no_flash:
         print("--no-flash set, skipping flash")
+        if args.backend_url:
+            register_with_backend(
+                backend_url=args.backend_url,
+                serial=args.serial,
+                uuid_hex=uuid_hex,
+                oob_hex=oob_hex,
+                claim_jti=claim["jti"],
+                claim_exp=claim["exp"],
+                cf_token=args.backend_token,
+            )
         return 0
 
     if not args.nvs_only:
+        if not args.no_erase:
+            erase_chip(port)
         flash_app(port, build_dir)
     flash_factory_nvs(port, nvs_bin)
+
+    if args.backend_url:
+        register_with_backend(
+            backend_url=args.backend_url,
+            serial=args.serial,
+            uuid_hex=uuid_hex,
+            oob_hex=oob_hex,
+            claim_jti=claim["jti"],
+            claim_exp=claim["exp"],
+            cf_token=args.backend_token,
+        )
+    else:
+        print(
+            "register manually: curl -X PUT $DP_BACKEND_URL/api/admin/factory-devices/"
+            f"{args.serial} -H 'CF-Access-Client-Id: ...' "
+            "-H 'CF-Access-Client-Secret: ...' "
+            f"-d '{{\"serial_number\":\"{args.serial}\",\"mesh_uuid\":\"{uuid_hex}\","
+            f"\"oob_hex\":\"{oob_hex}\",\"claim_jti\":\"{claim['jti']}\","
+            f"\"claim_exp\":{claim['exp']}}}'"
+        )
 
     print("flash complete")
     return 0
