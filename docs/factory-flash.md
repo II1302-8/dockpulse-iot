@@ -1,19 +1,23 @@
 # Factory-flashing a new sensor node
 
-Each board needs an app image, a per-device OOB blob in `factory_nvs`, a signed
-COSE_Sign1 adoption claim, and a QR sticker. The backend also needs a
-`factory_devices` row pairing the serial to its mesh UUID and OOB — the QR
-itself no longer carries those fields (it shrunk ~3.3x once they moved
-out). `tools/factory-flash.py` handles all of it in one shot, including the
-backend PUT.
+Each board needs an app image, a per-device OOB blob in `factory_nvs`, and a
+QR sticker. The backend keeps a `factory_devices` row pairing the serial to
+its mesh UUID, OOB, and jti — the QR is just plaintext `serial:jti`
+(~45 chars, ~37×37 modules). The real auth happens at PB-ADV provisioning
+time via the OOB inside `factory_nvs`, not via the sticker itself, so it can
+stay small.
+
+`tools/factory-flash.py` handles all of it in one shot, including the backend
+PUT.
 
 ## Host setup (once per workstation)
 
 ```bash
-tools/factory-keygen.sh        # generates the factory Ed25519 keypair
 brew install qrencode          # needed for the sticker PNG
-pip install cbor2 base45       # signing + QR encoding (IDF pyenv works too)
 ```
+
+No factory key to manage anymore. The QR is unsigned plaintext; the OOB-based
+PB-ADV handshake is the real authentication boundary.
 
 ### Backend credentials
 
@@ -66,8 +70,8 @@ That command:
 1. Reads the chip MAC, derives the BLE-mesh UUID
    (`MAC ‖ "DOCKPULSE" ‖ 0x01`).
 2. Generates a random 16-byte static OOB.
-3. Signs a compact COSE_Sign1 claim
-   (`{1: serial, 2: jti, 3: exp}`, Ed25519) using the factory key.
+3. Mints a fresh UUID as the sticker jti and assembles `serial:jti` as the
+   QR payload.
 4. Builds a `factory_nvs` partition image containing the OOB.
 5. Erases the chip, flashes bootloader + partition table + app + `factory_nvs`.
 6. Writes `device.json`, `qr.txt`, `factory_nvs.bin`, and `qr.png` into

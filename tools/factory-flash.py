@@ -2,13 +2,14 @@
 """Per-device factory flash for DockPulse sensor and gateway nodes.
 
 Reads the device MAC, composes a mesh UUID matching dp_prov_get_dev_uuid
-(MAC + "DOCKPULSE" + 0x01), generates a random 16-byte static OOB, signs
-a COSE_Sign1 claim (Ed25519) with the factory key, builds an NVS
-partition image holding the OOB, flashes bootloader + ptable + app +
-factory_nvs over USB, and renders a base45-encoded QR PNG that fits on
-a 25mm sticker. After flashing the board, the script PUTs uuid+oob to
-the backend's /api/admin/factory-devices/{serial} so adoption can look
-them up by serial (the QR no longer carries them).
+(MAC + "DOCKPULSE" + 0x01), generates a random 16-byte static OOB,
+builds an NVS partition image holding the OOB, flashes bootloader +
+ptable + app + factory_nvs over USB, and renders a plaintext
+`serial:jti` QR PNG. After flashing the board, the script PUTs
+uuid + oob + jti to the backend's /api/admin/factory-devices/{serial}.
+Adoption is a lookup by serial; the OOB-based PB-ADV handshake is the
+real auth, so the sticker only needs to be unforgeable enough to find
+the right row.
 
 Run after `tools/build.sh` for the role you want, with the board
 attached:
@@ -19,9 +20,8 @@ attached:
 
 Prereqs:
 - ESP-IDF env activated (we activate it ourselves if you have $IDF_PATH set)
-- `tools/factory-keygen.sh` already ran once on this host
 - `qrencode` on $PATH for the sticker PNG (brew install qrencode)
-- `cryptography`, `cbor2`, `base45` Python packages (pip install if missing)
+- `cryptography` Python package for HTTPS (already in IDF's pyenv)
 """
 from __future__ import annotations
 
@@ -38,15 +38,6 @@ import urllib.error
 import urllib.request
 import uuid as _uuid
 from pathlib import Path
-
-try:
-    import base45
-    import cbor2
-except ImportError:
-    sys.stderr.write(
-        "factory-flash: missing dep. pip install cbor2 base45 (both small, no native code).\n"
-    )
-    sys.exit(1)
 
 # share helpers with verify-device.py and print-qr.py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -76,23 +67,8 @@ APP_FLASH_OFFSETS = {
 }
 
 
-# COSE constants — keep in sync with backend/app/adoption/cose.py
-_COSE_TAG_SIGN1 = 18
-_COSE_HDR_ALG = 1
-_COSE_ALG_EDDSA = -8
-
-
-def _sig_structure(protected: bytes, payload: bytes) -> bytes:
-    return cbor2.dumps(["Signature1", protected, b"", payload])
-
-
 def assert_path_gitignored(path: Path, what: str) -> None:
-    """Refuse to read/write secrets at a path git wouldn't ignore.
-
-    Belt-and-braces: the repo ships a .gitignore for factory/private/ and
-    factory/devices/ but a future contributor might rearrange paths. Run
-    from a git checkout and ask git directly — the source of truth.
-    """
+    # belt-and-braces against future repo reshuffles, git is source of truth
     try:
         out = subprocess.run(
             ["git", "check-ignore", "-q", str(path)],
@@ -100,7 +76,6 @@ def assert_path_gitignored(path: Path, what: str) -> None:
             check=False,
         )
     except FileNotFoundError:
-        # not a git checkout (zip download, etc), let the user decide
         sys.stderr.write(
             f"factory-flash: warning, git not available, can't verify "
             f"{path} is gitignored\n"
@@ -114,31 +89,17 @@ def assert_path_gitignored(path: Path, what: str) -> None:
         )
 
 
-def sign_claim(
-    serial: str, exp_days: int, priv_pem: bytes
-) -> tuple[str, dict]:
-    """Build a base45 COSE_Sign1 (Ed25519) claim.
+def mint_claim(serial: str, exp_days: int) -> tuple[str, dict]:
+    """Return (qr_text, claim_meta).
 
-    Returns (qr_text, claim_meta). claim_meta carries jti+exp so the
-    caller can write device.json + POST to the backend; uuid + oob are
-    NOT signed any more, the backend resolves them by serial.
+    QR is plaintext `serial:jti`, the backend resolves uuid+oob+exp by
+    serial. The real auth is the OOB-based PB-ADV handshake; the sticker
+    is a name + replay-protection token, like HomeKit/Matter setup codes.
     """
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-    priv = load_pem_private_key(priv_pem, password=None)
     now = int(time.time())
     exp = now + exp_days * 86400
-    jti = _uuid.uuid4()
-    # compact CBOR payload: integer keys keep the QR tiny.
-    # 1=serial, 2=jti(16 raw bytes), 3=exp(unix int)
-    payload = cbor2.dumps({1: serial, 2: jti.bytes, 3: exp})
-    protected = cbor2.dumps({_COSE_HDR_ALG: _COSE_ALG_EDDSA})
-    signature = priv.sign(_sig_structure(protected, payload))
-    cose_blob = cbor2.dumps(
-        cbor2.CBORTag(_COSE_TAG_SIGN1, [protected, {}, payload, signature])
-    )
-    qr_text = base45.b45encode(cose_blob).decode()
-    return qr_text, {"jti": str(jti), "iat": now, "exp": exp}
+    jti = str(_uuid.uuid4())
+    return f"{serial}:{jti}", {"jti": jti, "iat": now, "exp": exp}
 
 
 def register_with_backend(
@@ -315,7 +276,6 @@ def main() -> int:
     ap.add_argument("--serial", required=True, help="human-readable SN, e.g. DP-N-000123")
     ap.add_argument("--port", default=None, help="serial port (default: first attached usb-serial)")
     ap.add_argument("--role", choices=["sensor", "gateway"], default="sensor")
-    ap.add_argument("--key", default=str(REPO / "factory/private/factory.pem"))
     ap.add_argument("--out", default=None, help="artefact dir (default: factory/devices/<serial>)")
     ap.add_argument("--exp-days", type=int, default=365)
     ap.add_argument("--nvs-only", action="store_true", help="skip app/bootloader flash")
@@ -356,11 +316,6 @@ def main() -> int:
     port = args.port or default_port()
     if not port and not args.no_flash:
         fail("no usb-serial device found. Plug in a board or pass --port, or use --no-flash.")
-    priv_path = Path(args.key)
-    if not args.reflash_nvs and not priv_path.is_file():
-        fail(f"factory private key missing at {priv_path}. Run tools/factory-keygen.sh.")
-    if not args.reflash_nvs:
-        assert_path_gitignored(priv_path, "private key")
 
     out_dir = Path(args.out) if args.out else REPO / "factory/devices" / args.serial
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -412,8 +367,7 @@ def main() -> int:
     oob = secrets.token_bytes(16)
     oob_hex = oob.hex()
 
-    priv_pem = priv_path.read_bytes()
-    qr_text, claim = sign_claim(args.serial, args.exp_days, priv_pem)
+    qr_text, claim = mint_claim(args.serial, args.exp_days)
     warn_if_expiring(claim["exp"], label=f"new claim (--exp-days={args.exp_days})")
 
     gen_nvs_image(oob_hex, nvs_bin)
