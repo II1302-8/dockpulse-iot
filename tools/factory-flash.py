@@ -36,7 +36,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import uuid as _uuid
 from pathlib import Path
 
 # share helpers with verify-device.py and print-qr.py
@@ -92,13 +91,15 @@ def assert_path_gitignored(path: Path, what: str) -> None:
 def mint_claim(serial: str, exp_days: int) -> tuple[str, dict]:
     """Return (qr_text, claim_meta).
 
-    QR is plaintext `serial:jti`, the backend resolves uuid+oob+exp by
-    serial. The real auth is the OOB-based PB-ADV handshake; the sticker
-    is a name + replay-protection token, like HomeKit/Matter setup codes.
+    QR is plaintext `SERIAL:JTI` in UPPERCASE so the QR encoder hits
+    alphanumeric mode (5.5 bits/char) instead of byte mode (8 bits/char).
+    64-bit jti = 16 uppercase hex chars; collision at 2^32 stickers, way
+    past expected fleet. Real auth is the OOB-based PB-ADV handshake;
+    sticker is a name + replay token like HomeKit/Matter setup codes.
     """
     now = int(time.time())
     exp = now + exp_days * 86400
-    jti = str(_uuid.uuid4())
+    jti = secrets.token_hex(8).upper()
     return f"{serial}:{jti}", {"jti": jti, "iat": now, "exp": exp}
 
 
