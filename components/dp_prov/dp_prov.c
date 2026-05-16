@@ -24,6 +24,7 @@ static const char *TAG = "dp_prov";
 typedef struct {
     uint16_t unicast_addr; // 0 = empty
     char berth_id[DP_PROV_BERTH_ID_MAX];
+    char node_id[DP_PROV_NODE_ID_MAX];
 } dp_prov_record_t;
 
 typedef struct {
@@ -33,10 +34,40 @@ typedef struct {
     dp_prov_record_t records[DP_PROV_MAX_RECORDS];
 } dp_prov_table_t;
 
-#define DP_PROV_TABLE_VERSION 1
+// v2 added per-record node_id. mismatch wipes the table; pre-alpha demo
+// re-adopts to repopulate, no migration needed
+#define DP_PROV_TABLE_VERSION 2
 
 static dp_prov_table_t s_table;
 static bool s_loaded;
+
+static esp_err_t save_table(void);
+
+// v1 layout: same as v2 minus per-record node_id. kept for in-place migration
+// so already-adopted gateways don't lose their unicast->berth mappings
+typedef struct {
+    uint16_t unicast_addr;
+    char berth_id[DP_PROV_BERTH_ID_MAX];
+} dp_prov_record_v1_t;
+
+typedef struct {
+    uint8_t version;
+    uint8_t count;
+    uint16_t _pad;
+    dp_prov_record_v1_t records[DP_PROV_MAX_RECORDS];
+} dp_prov_table_v1_t;
+
+static void migrate_from_v1(const dp_prov_table_v1_t *old)
+{
+    memset(&s_table, 0, sizeof(s_table));
+    s_table.version = DP_PROV_TABLE_VERSION;
+    s_table.count = old->count;
+    for (size_t i = 0; i < DP_PROV_MAX_RECORDS; i++) {
+        s_table.records[i].unicast_addr = old->records[i].unicast_addr;
+        memcpy(s_table.records[i].berth_id, old->records[i].berth_id, DP_PROV_BERTH_ID_MAX);
+        s_table.records[i].node_id[0] = '\0';
+    }
+}
 
 static esp_err_t load_table(void)
 {
@@ -51,7 +82,31 @@ static esp_err_t load_table(void)
     if (err != ESP_OK) {
         return err;
     }
-    size_t sz = sizeof(s_table);
+    size_t sz = 0;
+    err = nvs_get_blob(h, NVS_TABLE_KEY, NULL, &sz);
+    if (err == ESP_OK && sz == sizeof(dp_prov_table_v1_t)) {
+        dp_prov_table_v1_t old = {0};
+        size_t old_sz = sizeof(old);
+        err = nvs_get_blob(h, NVS_TABLE_KEY, &old, &old_sz);
+        nvs_close(h);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if (old.version == 1) {
+            migrate_from_v1(&old);
+            ESP_LOGI(TAG, "migrated nvs table v1 -> v%d, %u records preserved",
+                     DP_PROV_TABLE_VERSION, s_table.count);
+            s_loaded = true;
+            // persist immediately so next boot reads new layout
+            (void)save_table();
+            return ESP_OK;
+        }
+        memset(&s_table, 0, sizeof(s_table));
+        s_table.version = DP_PROV_TABLE_VERSION;
+        s_loaded = true;
+        return ESP_OK;
+    }
+    sz = sizeof(s_table);
     err = nvs_get_blob(h, NVS_TABLE_KEY, &s_table, &sz);
     nvs_close(h);
     if (err == ESP_ERR_NVS_NOT_FOUND || sz != sizeof(s_table) ||
@@ -101,12 +156,29 @@ const char *dp_prov_lookup_berth(uint16_t unicast_addr)
     return NULL;
 }
 
-esp_err_t dp_prov_record_berth(uint16_t unicast_addr, const char *berth_id)
+const char *dp_prov_lookup_node_id(uint16_t unicast_addr)
+{
+    if (!s_loaded || unicast_addr == 0) {
+        return NULL;
+    }
+    for (size_t i = 0; i < DP_PROV_MAX_RECORDS; i++) {
+        if (s_table.records[i].unicast_addr == unicast_addr) {
+            return s_table.records[i].node_id[0] ? s_table.records[i].node_id : NULL;
+        }
+    }
+    return NULL;
+}
+
+esp_err_t dp_prov_record_node(uint16_t unicast_addr, const char *berth_id,
+                              const char *node_id)
 {
     if (!unicast_addr || !berth_id || !*berth_id) {
         return ESP_ERR_INVALID_ARG;
     }
     if (strnlen(berth_id, DP_PROV_BERTH_ID_MAX) >= DP_PROV_BERTH_ID_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (node_id && strnlen(node_id, DP_PROV_NODE_ID_MAX) >= DP_PROV_NODE_ID_MAX) {
         return ESP_ERR_INVALID_SIZE;
     }
     if (!s_loaded) {
@@ -150,10 +222,17 @@ esp_err_t dp_prov_record_berth(uint16_t unicast_addr, const char *berth_id)
     s_table.records[slot].unicast_addr = unicast_addr;
     strncpy(s_table.records[slot].berth_id, berth_id, DP_PROV_BERTH_ID_MAX - 1);
     s_table.records[slot].berth_id[DP_PROV_BERTH_ID_MAX - 1] = '\0';
+    if (node_id && *node_id) {
+        strncpy(s_table.records[slot].node_id, node_id, DP_PROV_NODE_ID_MAX - 1);
+        s_table.records[slot].node_id[DP_PROV_NODE_ID_MAX - 1] = '\0';
+    } else {
+        s_table.records[slot].node_id[0] = '\0';
+    }
     esp_err_t err = save_table();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "record unicast=0x%04x berth=%s", unicast_addr,
-                 s_table.records[slot].berth_id);
+        ESP_LOGI(TAG, "record unicast=0x%04x berth=%s node=%s", unicast_addr,
+                 s_table.records[slot].berth_id,
+                 s_table.records[slot].node_id[0] ? s_table.records[slot].node_id : "-");
     }
     return err;
 }
