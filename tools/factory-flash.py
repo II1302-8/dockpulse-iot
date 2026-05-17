@@ -129,7 +129,11 @@ def register_with_backend(
             "claim_exp": claim_exp,
         }
     ).encode()
-    headers = {"content-type": "application/json"}
+    # CF WAF flags Python-urllib's default UA as bot, returns 1010
+    headers = {
+        "content-type": "application/json",
+        "user-agent": "dockpulse-factory-flash/1.0",
+    }
     cf_id = os.environ.get("DP_CF_ACCESS_CLIENT_ID")
     cf_secret = os.environ.get("DP_CF_ACCESS_CLIENT_SECRET")
     if cf_id and cf_secret:
