@@ -126,3 +126,92 @@ tools/factory-flash.py --serial DP-N-000123 --force --nvs-only
 existing `factory_devices` row), and produces a new `qr.png`. Any previously
 printed sticker for that serial is invalidated by the JTI mismatch check on
 adoption.
+
+## Bench / development builds
+
+`tools/factory-flash.py` is for production stickers — it bakes a per-device
+OOB into `factory_nvs` and registers the device with the backend. For
+day-to-day development you usually want `tools/run.sh` instead, which
+builds, flashes, and tails the monitor in one shot. The two flows are
+independent: a bench board can be re-factory-flashed later without
+re-building.
+
+### Flash a sensor that emits fake radar data
+
+For mesh / MQTT / dashboard work without a real radar attached:
+
+```bash
+tools/run.sh -r sensor -p /dev/cu.usbmodemXX -n 1 --fake
+```
+
+What `--fake` does: forces `CONFIG_DOCKPULSE_RADAR_FAKE=y` so
+`dp_radar_read()` returns a synthetic distance that walks 200 → 780 cm in a
+30-sample cycle and toggles the `presence` flag accordingly. No UART, no
+sensor module needed — a bare ESP32-C3 with USB is enough.
+
+`-n N` sets `CONFIG_DOCKPULSE_NODE_ID` (1..255), used as the mesh-side label
+in logs. The backend-assigned UUID is what shows up in MQTT after adoption;
+the compile-time `-n` is only for log correlation across multiple bench
+boards on the same gateway.
+
+Switch back to a real radar with `--real`:
+
+```bash
+tools/run.sh -r sensor -p /dev/cu.usbmodemXX -n 1 --real
+```
+
+### Sensor pinout: LED + battery ADC defaults
+
+`sdkconfig.sensor` already enables the full pinout used on the reference
+board (Waveshare ESP32-C3-Zero + custom carrier):
+
+| Function | Kconfig | Default GPIO | Notes |
+| --- | --- | --- | --- |
+| Status LED (WS2812 RGB) | `DOCKPULSE_LED_GPIO` | 10 | `DOCKPULSE_LED_WS2812=y` drives the onboard RGB. Set `=n` for a plain GPIO LED, then `DOCKPULSE_LED_ACTIVE_LOW` for the inverted SuperMini wiring. `-1` disables. |
+| Berth-status green LED | `DOCKPULSE_BERTH_LED_GREEN_GPIO` | 3 | Plain GPIO, lit when the berth reads "free". `-1` disables. |
+| Berth-status red LED | `DOCKPULSE_BERTH_LED_RED_GPIO` | 4 | Same family as green; pair both for a free/occupied indicator on the dock. |
+| Battery ADC | `DOCKPULSE_BATTERY_ADC_GPIO` | 2 | Requires a 100 k / 100 k divider so VBAT ≤ 3.3 V at the pin. ADC1 channels only (GPIO 0..4 on C3). `-1` disables battery reporting. |
+| Factory-reset button | `DOCKPULSE_FACTORY_RESET_GPIO` | 9 | BOOT button on most C3 devkits, long-press wipes mesh NVS. `-1` disables. |
+
+The defaults are committed in `sdkconfig.sensor` and apply automatically
+when you build with `-r sensor`. Re-flashing with the same Kconfig keeps
+the pins active — no extra flag needed:
+
+```bash
+tools/run.sh -r sensor -p /dev/cu.usbmodemXX -n 1 --fake   # LED + ADC + berth LEDs all on
+```
+
+Verify on first boot: the monitor logs `dp_led: init gpio=10 ws2812=1`,
+`dp_battery: adc gpio=2 ...`, and the berth-status LEDs flash green/red as
+fake samples flip.
+
+### Overriding a single GPIO
+
+If you've wired the LED to a different pin (e.g. GPIO 8 on a SuperMini),
+override via the per-invocation Kconfig file picked up by `tools/run.sh`:
+
+```bash
+cat > /tmp/dp-override.kconfig <<'EOF'
+CONFIG_DOCKPULSE_LED_GPIO=8
+# CONFIG_DOCKPULSE_LED_WS2812 is not set
+CONFIG_DOCKPULSE_LED_ACTIVE_LOW=y
+EOF
+SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sensor;/tmp/dp-override.kconfig" \
+  idf.py -B build_sensor -p /dev/cu.usbmodemXX -b 460800 flash monitor
+```
+
+For longer-lived overrides edit `sdkconfig.sensor` directly and commit; the
+diff is small and easy to revert per-branch.
+
+### Disabling specific peripherals on a bench board
+
+Set the GPIO Kconfig to `-1` and the driver init becomes a no-op:
+
+```bash
+# bench board with no ADC divider populated
+echo "CONFIG_DOCKPULSE_BATTERY_ADC_GPIO=-1" > /tmp/dp-override.kconfig
+```
+
+Same pattern works for the LED pins, factory-reset button, and berth LEDs.
+The build doesn't include the corresponding init code at all, so a
+disabled pin can be re-purposed elsewhere on the chip.
